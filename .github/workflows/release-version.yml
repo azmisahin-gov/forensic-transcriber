@@ -1,0 +1,137 @@
+name: Release (version)
+
+# Controlled release trigger.
+#
+# Normal development never releases: a push or merge to main runs CI only.
+# A maintainer starts THIS workflow, chooses patch/minor/major, and the version
+# is calculated, committed, tagged and handed to the build/publish workflow.
+#
+# GitHub does not run workflows for events raised by the default GITHUB_TOKEN,
+# so a tag pushed here would not trigger a separate tag-triggered workflow. To
+# keep the process deterministic, this workflow calls the reusable build
+# workflow directly (see `.github/workflows/release.yml`, `workflow_call`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Semantic version bump'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-version
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # A token that can push. The default GITHUB_TOKEN is sufficient for
+          # the push itself; it cannot trigger further workflows, which is why
+          # the build is called directly rather than via the tag event.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Guard - must be on main and up to date
+        run: |
+          set -e
+          git fetch origin main --tags --force
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+            echo "Refusing: checked-out commit is not the tip of origin/main."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Calculate and apply the version bump
+        id: bump
+        run: |
+          set -e
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "Current version: ${CURRENT}"
+
+          # planRelease refuses duplicate tags and invalid types.
+          node -e "
+            const v = require('./src/shared/versioning');
+            const { execSync } = require('node:child_process');
+            const tags = execSync('git tag --list', { encoding: 'utf8' }).split('\n').filter(Boolean);
+            const plan = v.planRelease({ currentVersion: '${CURRENT}', releaseType: '${{ inputs.release_type }}', existingTags: tags });
+            if (!plan.ok) { console.error('Refusing to release: ' + plan.message + ' [' + plan.code + ']'); process.exit(1); }
+            console.log('Planned: ' + plan.currentVersion + ' -> ' + plan.nextVersion + ' (tag ' + plan.tag + ')');
+          "
+
+          node scripts/bump-version.js --type ${{ inputs.release_type }} --no-git
+
+          NEW=$(node -p "require('./package.json').version")
+          TAG="v${NEW}"
+          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "New version: ${NEW} (tag ${TAG})"
+
+      - name: Verify tag/version consistency
+        run: |
+          set -e
+          node -e "
+            const v = require('./src/shared/versioning');
+            const pkg = require('./package.json');
+            const r = v.checkTagVersionConsistency('${{ steps.bump.outputs.tag }}', pkg.version);
+            if (!r.ok) { console.error(r.message); process.exit(1); }
+            console.log('Tag and package.json agree: ' + pkg.version);
+          "
+          node -e "
+            const lock = require('./package-lock.json');
+            const pkg = require('./package.json');
+            if (lock.version !== pkg.version || (lock.packages && lock.packages[''] && lock.packages[''].version !== pkg.version)) {
+              console.error('package-lock.json version does not match package.json'); process.exit(1);
+            }
+            console.log('package-lock.json agrees: ' + lock.version);
+          "
+
+      - name: Commit the version bump
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "Release ${{ steps.bump.outputs.version }}"
+
+      - name: Create the annotated tag
+        run: |
+          set -e
+          git tag -a "${{ steps.bump.outputs.tag }}" -m "Release ${{ steps.bump.outputs.version }}"
+          git show-ref --tags | grep "${{ steps.bump.outputs.tag }}" || true
+
+      - name: Push the commit and the tag
+        run: |
+          set -e
+          git push origin main
+          git push origin "${{ steps.bump.outputs.tag }}"
+
+  build-and-publish:
+    needs: version
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+      version: ${{ needs.version.outputs.version }}
+    permissions:
+      contents: write

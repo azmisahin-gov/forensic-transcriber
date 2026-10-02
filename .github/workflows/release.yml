@@ -1,19 +1,76 @@
-name: Release
+name: Release (build & publish)
+
+# Builds and publishes the Windows release. Two ways in:
+#  - called by the version workflow (`release-version.yml`) after it has
+#    committed the bump and pushed the vX.Y.Z tag, or
+#  - started manually with an existing tag (for a rebuild or a re-publish).
+#
+# The tag/version consistency is re-checked here so a tag can never publish a
+# commit whose package.json disagrees with it.
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release tag (vX.Y.Z)'
+        required: true
+        type: string
+      version:
+        description: 'Application version (X.Y.Z)'
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag (vX.Y.Z)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Check tag and package.json agree
+        id: check
+        run: |
+          set -e
+          TAG="${{ inputs.tag }}"
+          APP_VERSION=$(node -p "require('./package.json').version")
+          node -e "
+            const v = require('./src/shared/versioning');
+            const r = v.checkTagVersionConsistency('${TAG}', '${APP_VERSION}');
+            if (!r.ok) { console.error('Refusing to publish: ' + r.message); process.exit(1); }
+            console.log('Tag and version agree: ' + r.version);
+          "
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$APP_VERSION" ]; then
+            echo "Refusing: requested version ${{ inputs.version }} does not match package.json $APP_VERSION"
+            exit 1
+          fi
+          echo "version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
   build-windows:
+    needs: verify-version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify-version.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -71,30 +128,28 @@ jobs:
       - name: Security check
         run: node scripts/security-check.js
 
-      - name: Build installer and portable
+      # Builds the NSIS installer (the auto-update payload) and the portable
+      # zip, and writes latest.yml (updater metadata) next to them.
+      - name: Build installer, portable and updater metadata
         run: npx electron-builder --win nsis zip --x64 --publish never
 
-      - name: Checksums
-        shell: bash
-        run: |
-          cd release
-          sha256sum ForensicTranscriber-Setup-x64.exe ForensicTranscriber-Portable-x64.zip > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Upload artefacts
+      - name: Upload Windows artefacts
         uses: actions/upload-artifact@v4
         with:
           name: forensic-transcriber-windows
           path: |
             release/ForensicTranscriber-Setup-x64.exe
             release/ForensicTranscriber-Portable-x64.zip
-            release/SHA256SUMS.txt
+            release/latest.yml
           if-no-files-found: error
 
   model-package:
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify-version.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -116,28 +171,45 @@ jobs:
           path: release/ForensicTranscriber-ModelPack-*.zip
           if-no-files-found: error
 
-  release:
-    needs: [build-windows, model-package]
+  publish:
+    needs: [verify-version, build-windows, model-package]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
       - name: Download artefacts
         uses: actions/download-artifact@v4
         with:
           path: artefacts
           merge-multiple: true
-      - name: Verify expected assets are present
+
+      - name: Verify the complete artefact set is present
         run: |
           set -e
           missing=0
-          for f in ForensicTranscriber-Setup-x64.exe ForensicTranscriber-Portable-x64.zip; do
+          for f in ForensicTranscriber-Setup-x64.exe ForensicTranscriber-Portable-x64.zip latest.yml; do
             if ! find artefacts -type f -name "$f" | grep -q .; then echo "MISSING: $f"; missing=1; fi
           done
           if ! find artefacts -type f -name 'ForensicTranscriber-ModelPack-*.zip' | grep -q .; then
             echo "MISSING: ForensicTranscriber-ModelPack-*.zip"; missing=1
           fi
-          if [ "$missing" -ne 0 ]; then echo "Release would reference nonexistent assets."; exit 1; fi
-          echo "All expected assets present."
+          # Guard: a Linux build must never be published as a Windows artefact.
+          if find artefacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*-linux*' \) | grep -q .; then
+            echo "Linux artefacts present; refusing to publish them as Windows assets."; missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then echo "Release would reference nonexistent or wrong assets."; exit 1; fi
+          echo "All expected artefacts present."
+
+      - name: Verify updater metadata references the installer
+        run: node scripts/verify-updater-metadata.js --file artefacts/latest.yml --version "${{ needs.verify-version.outputs.version }}"
+
       - name: Generate combined SHA256SUMS
         run: |
           set -e
@@ -147,11 +219,16 @@ jobs:
             | sort -z | xargs -0 sha256sum | sed 's#  ./#  #' > SHA256SUMS.txt
           echo "--- SHA256SUMS.txt ---"
           cat SHA256SUMS.txt
-      - name: Publish release
+
+      - name: Publish the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.verify-version.outputs.tag }}
+          name: Forensic Transcriber ${{ needs.verify-version.outputs.version }}
           files: |
-            artefacts/**/*.exe
-            artefacts/**/*.zip
-            artefacts/**/SHA256SUMS.txt
+            artefacts/ForensicTranscriber-Setup-x64.exe
+            artefacts/ForensicTranscriber-Portable-x64.zip
+            artefacts/latest.yml
+            artefacts/ForensicTranscriber-ModelPack-*.zip
+            artefacts/SHA256SUMS.txt
           generate_release_notes: true

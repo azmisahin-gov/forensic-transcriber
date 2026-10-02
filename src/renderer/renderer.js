@@ -90,9 +90,100 @@
       toast('FFmpeg decoder not found. Import and transcription will not work.', 'error');
     }
     state.progressUnsub = api.transcribe.onProgress(handleProgress);
+    initUpdaterUi();
     await refreshModels();
     await refreshCases();
     $('#app').setAttribute('aria-hidden', 'false');
+  }
+
+  // ------------------------------------------------------------------ updates
+  // Application auto-update UI. It never downloads or installs on its own; the
+  // user chooses to download and separately chooses to restart and install.
+  const UPDATE_LABELS = {
+    idle: 'No update action pending.',
+    checking: 'Checking for updates…',
+    'not-available': 'You have the latest version.',
+    available: 'An update is available.',
+    postponed: 'Update postponed. You can install it later.',
+    downloading: 'Downloading update…',
+    downloaded: 'Update downloaded. Restart to install it.',
+    error: 'The update could not be completed. Your current version still works.',
+  };
+
+  function initUpdaterUi() {
+    api.updates.onStatus(renderUpdateState);
+    api.updates.state().then((s) => {
+      if (s && s.ok) renderUpdateState(s.data);
+    }).catch(() => {});
+  }
+
+  function renderUpdateState(s) {
+    if (!s) return;
+    const statusEl = $('#update-status');
+    const badge = $('#update-badge');
+    const btnTop = $('#btn-update');
+    const dlBtn = $('#btn-update-download');
+    const postBtn = $('#btn-update-postpone');
+    const instBtn = $('#btn-update-install');
+    const notesBtn = $('#btn-update-release-notes');
+    const progressWrap = $('#update-progress-wrap');
+
+    statusEl.textContent = UPDATE_LABELS[s.status] || s.status;
+    if (s.availableVersion && s.status !== 'not-available') {
+      statusEl.textContent += ` (version ${s.availableVersion})`;
+    }
+
+    const available = s.status === 'available';
+    const postponed = s.status === 'postponed';
+    const downloading = s.status === 'downloading';
+    const downloaded = s.status === 'downloaded';
+
+    badge.classList.toggle('hidden', !(available || postponed || downloaded));
+    badge.textContent = downloaded ? 'Update ready' : available || postponed ? 'Update available' : '';
+    badge.className = `badge ${downloaded ? 'badge-ok' : 'badge-warn'}`;
+
+    btnTop.classList.toggle('hidden', !(available || postponed || downloaded));
+
+    dlBtn.classList.toggle('hidden', !available);
+    postBtn.classList.toggle('hidden', !available);
+    instBtn.classList.toggle('hidden', !downloaded);
+    notesBtn.classList.toggle('hidden', !(available || postponed || downloaded));
+    progressWrap.classList.toggle('hidden', !downloading);
+    if (downloading) {
+      $('#update-progress-bar').style.width = `${s.downloadPercent || 0}%`;
+      $('#update-progress-label').textContent = `${s.downloadPercent || 0}%`;
+    }
+
+    const errEl = $('#update-error');
+    if (s.status === 'error' && s.error) {
+      errEl.textContent = `Update error: ${s.error}`;
+      errEl.classList.remove('hidden');
+    } else {
+      errEl.classList.add('hidden');
+    }
+  }
+
+  function renderAbout() {
+    const info = state.appInfo || {};
+    const dl = $('#about-info');
+    dl.innerHTML = '';
+    const rows = [
+      ['Application', `${info.name || 'Forensic Transcriber'} ${info.version || ''}`.trim()],
+      ['Scope', info.scope || '56.12'],
+      ['Platform', `${info.platform || ''} ${info.arch || ''}`.trim()],
+      ['Electron / Node', `${info.electron || ''} / ${info.node || ''}`],
+      ['Data folder', info.dataDir || ''],
+      ['Models folder', info.modelsDir || ''],
+    ];
+    for (const [k, v] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      wrap.append(dt, dd);
+      dl.appendChild(wrap);
+    }
   }
 
   function updateModelBadge() {
@@ -910,6 +1001,52 @@
     $('#btn-redo').addEventListener('click', () => state.store && state.store.redo());
 
     $('#btn-models').addEventListener('click', () => $('#dialog-models').showModal());
+    $('#btn-about').addEventListener('click', () => {
+      renderAbout();
+      $('#dialog-about').showModal();
+    });
+    $('#btn-update').addEventListener('click', () => {
+      renderAbout();
+      $('#dialog-about').showModal();
+    });
+    $('#btn-update-check').addEventListener('click', async () => {
+      try {
+        await call(api.updates.check());
+      } catch (err) {
+        toast(`Update check failed: ${errText(err)}`, 'error');
+      }
+    });
+    $('#btn-update-download').addEventListener('click', async () => {
+      try {
+        await call(api.updates.download());
+      } catch (err) {
+        toast(`Update download failed: ${errText(err)}`, 'error');
+      }
+    });
+    $('#btn-update-postpone').addEventListener('click', async () => {
+      try {
+        await call(api.updates.postpone());
+        toast('Update postponed. Your current version keeps working.');
+      } catch (err) {
+        toast(`Could not postpone: ${errText(err)}`, 'error');
+      }
+    });
+    $('#btn-update-install').addEventListener('click', async () => {
+      const ok = await confirmDialog(
+        'Restart and install?',
+        'The application will close and restart into the new version. Your case data and speech model are not affected.'
+      );
+      if (!ok) return;
+      try {
+        const res = await call(api.updates.install());
+        if (res && res.ok === false) toast('The update is not ready to install yet.', 'error');
+      } catch (err) {
+        toast(`Could not start the update: ${errText(err)}`, 'error');
+      }
+    });
+    $('#btn-update-release-notes').addEventListener('click', () => {
+      window.open('https://github.com/azmisahin-gov/forensic-transcriber/releases', '_blank', 'noopener');
+    });
     $('#btn-first-run-models').addEventListener('click', () => $('#dialog-models').showModal());
     $('#btn-first-run-install').addEventListener('click', async (e) => {
       const btn = e.currentTarget;

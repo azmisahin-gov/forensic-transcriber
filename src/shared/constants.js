@@ -61,6 +61,12 @@
   const IPC = Object.freeze({
     APP_INFO: 'app:info',
     APP_ENGINE_PROBE: 'app:engine-probe',
+    UPDATE_STATUS: 'update:status',
+    UPDATE_STATE: 'update:state',
+    UPDATE_CHECK: 'update:check',
+    UPDATE_DOWNLOAD: 'update:download',
+    UPDATE_POSTPONE: 'update:postpone',
+    UPDATE_INSTALL: 'update:install',
     PATHS: 'app:paths',
     CASE_CREATE: 'case:create',
     CASE_LIST: 'case:list',

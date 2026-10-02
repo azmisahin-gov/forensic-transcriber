@@ -56,6 +56,28 @@ function main() {
   const sec = spawnSync(process.execPath, ['scripts/security-check.js'], { cwd: REPO_ROOT, encoding: 'utf8' });
   record('security check', sec.status === 0, sec.status === 0 ? '' : 'critical findings present');
 
+  // Release-lifecycle gates: version/tag consistency and updater metadata.
+  const versioning = require('../src/shared/versioning');
+  const pkg = require('../package.json');
+  record('package.json version is valid SemVer', versioning.isValidVersion(pkg.version), pkg.version);
+  const lock = fs.existsSync(path.join(REPO_ROOT, 'package-lock.json'))
+    ? require('../package-lock.json')
+    : null;
+  if (lock) {
+    const lockMatches = lock.version === pkg.version
+      && (!lock.packages || !lock.packages[''] || lock.packages[''].version === pkg.version);
+    record('package-lock.json matches package.json', lockMatches, `lock ${lock.version} vs pkg ${pkg.version}`);
+  }
+  const tagCheck = spawnSync(process.execPath, ['scripts/verify-updater-metadata.js', '--file', path.join(REPO_ROOT, 'release', 'latest.yml'), '--version', pkg.version], {
+    cwd: REPO_ROOT, encoding: 'utf8',
+  });
+  if (fs.existsSync(path.join(REPO_ROOT, 'release', 'latest.yml'))) {
+    record('updater metadata valid', tagCheck.status === 0, (tagCheck.stdout || tagCheck.stderr || '').trim().slice(-160));
+  } else {
+    // eslint-disable-next-line no-console
+    console.log('INFO  updater metadata — no latest.yml yet (produced by a Windows build)');
+  }
+
   const asrModel = path.join(modelsDir, 'ggml-large-v3-turbo-q5_0.bin');
   const vadModel = path.join(modelsDir, 'ggml-silero-v5.1.2.bin');
   const whisperCli =

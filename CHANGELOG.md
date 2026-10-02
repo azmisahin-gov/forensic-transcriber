@@ -3,6 +3,50 @@
 All notable changes to this project are documented here.
 Format based on Keep a Changelog; the project follows Semantic Versioning.
 
+## [Unreleased] — release lifecycle
+
+### Added
+
+- **Controlled release lifecycle.** A **Release (version)** workflow
+  (`workflow_dispatch` with `patch`/`minor`/`major`) calculates the next SemVer,
+  updates `package.json`, `package-lock.json` and `CHANGELOG.md`, commits the
+  bump, creates the matching `vX.Y.Z` tag and calls the build/publish workflow.
+  Normal development never releases: pushes and merges to `main` run CI only.
+- **Semantic versioning module** (`src/shared/versioning.js`): parse, compare,
+  bump, tag formatting, tag/version consistency and duplicate-tag detection.
+- **Version bump script** (`scripts/bump-version.js`) with `--dry-run`, used by
+  the workflow and available locally.
+- **Windows auto-update** via `electron-updater` with GitHub Releases as the only
+  source: check, postpone, download with progress, and restart-and-install on
+  explicit user confirmation. Nothing is downloaded or installed automatically.
+- **Update UX**: an **About & updates** dialog with version information, update
+  status, progress and actions, plus a topbar badge when an update is available.
+- **Updater metadata**: `electron-builder` writes `latest.yml`, which is
+  published with the release and validated before publishing
+  (`scripts/verify-updater-metadata.js`).
+- **Tests**: 40 new unit tests (versioning, bump transforms, updater state
+  machine, updater metadata validation) and an integration test proving an
+  update never touches case data.
+
+### Changed
+
+- `release.yml` is now a reusable build/publish workflow (`workflow_call` plus
+  manual dispatch) that re-verifies tag/version consistency, refuses an
+  incomplete artefact set, refuses to publish Linux artefacts as Windows assets,
+  and validates `latest.yml` before publishing.
+- The combined `SHA256SUMS.txt` now covers every `.exe` and `.zip` in the release,
+  including the model package.
+
+### Security
+
+- The update source is pinned to `azmisahin-gov/forensic-transcriber` over HTTPS
+  on the `latest` channel; no other channel is configurable at runtime.
+- The model package is explicitly **not** an update payload, and publishing fails
+  if it appears in `latest.yml`.
+- Code signing is not available; this is documented honestly, and the updater's
+  integrity check is the sha512 in the release metadata, not a publisher
+  signature.
+
 ## [Unreleased] — release hardening
 
 ### Fixed

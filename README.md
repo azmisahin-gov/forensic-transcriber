@@ -101,6 +101,24 @@ Models dialog. See [Architecture](docs/architecture.md) and
 
 No Python, Node.js, Rust, CMake, CUDA Toolkit or FFmpeg installation is required.
 
+## Updates
+
+The installed application can update itself from GitHub Releases over HTTPS.
+
+- It checks once at startup and reports what it finds; you can also check from
+  **About → Application updates**.
+- Nothing is downloaded until you press **Download update**.
+- Nothing is installed until you press **Restart and install** and confirm.
+- You can **Postpone** an update; your current version keeps working.
+- An application update never touches your case data and never changes your
+  speech model. Models are installed separately from **Models → Install**.
+- A failed update leaves your current installation usable.
+
+The Windows executable is **not code-signed**, so SmartScreen may warn on first
+launch, and the updater's integrity check is the sha512 in the release metadata
+rather than a publisher signature. See
+[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md#code-signing-status).
+
 ## Quick start (developer)
 
 Prerequisites: Node.js 20+ and, for the native runtime, a C++ toolchain + CMake.
@@ -111,9 +129,26 @@ npm test                 # unit tests
 node scripts/fetch-runtime-windows.js   # or vendor-runtime.js for the host platform
 npm start                # run the app
 npm run build:win        # one-command Windows release (installer + portable + checksums)
+npm run verify:release   # run the full release gate locally
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+## Releasing
+
+Normal development never releases: pushing or merging to `main` runs CI only.
+To cut a release, a maintainer starts the **Release (version)** workflow and
+chooses `patch`, `minor` or `major`. The version is calculated, committed, tagged
+`vX.Y.Z`, and the tag is built and published to GitHub Releases.
+
+```bash
+# The same bump, locally (dry run first):
+node scripts/bump-version.js --type patch --dry-run
+node scripts/bump-version.js --type patch          # commits and tags
+```
+
+Full instructions — including how users receive and postpone updates, where the
+releases are hosted, and the code-signing limitation — are in
+[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md). See also
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
 
 ## Keyboard shortcuts
 
