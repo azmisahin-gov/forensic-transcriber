@@ -46,7 +46,7 @@ Built successfully; contains `Forensic Transcriber.exe` and
 `resources/vendor/bin/{whisper-cli.exe,ffmpeg.exe,ffprobe.exe}`. Not launched on
 real Windows hardware in this environment.
 
-OFFLINE MODEL PACKAGE: `ForensicTranscriber-ModelPack-0.1.0.zip`, 574 927 571
+OFFLINE MODEL PACKAGE: `ForensicTranscriber-ModelPack-0.1.0.zip`, 534 060 311
 bytes, SHA-256 `ef4ff3aa9dbd77d2431d7ff3305e99c33b57dd9bd5d01a9d719bfcda1ef03a1e`.
 Built by `scripts/build-model-package.js`: default ASR + VAD models, a
 checksummed `manifest.json`, and a README. Model files are verified against

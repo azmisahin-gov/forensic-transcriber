@@ -103,7 +103,7 @@ Command:
 FT_MODELS_DIR=... FT_WHISPER_CLI_PATH=... node scripts/verify-release.js --skip-package
 ```
 
-Result: **7/7 gates pass.**
+Result: **9/9 gates pass.**
 
 ```
 PASS  lint
@@ -112,9 +112,13 @@ PASS  security check
 PASS  integration tests
 PASS  packaged smoke test
 PASS  packaged acceptance test — 20 steps
+PASS  engine capability report — cpu ok, gpu runtime not bundled, run mode cpu
 PASS  release artefacts + checksums — ForensicTranscriber-ModelPack-0.1.0.zip,
       ForensicTranscriber-Portable-x64.zip, ForensicTranscriber-Setup-x64.exe
 ```
+
+(The `--skip-package` run reuses the existing packaged build; a full run also
+executes the packaging step as one of the gates.)
 
 Release artefacts (built by `npm run build:win` and
 `node scripts/build-model-package.js`):
@@ -123,7 +127,7 @@ Release artefacts (built by `npm run build:win` and
 | --- | --- | --- |
 | `ForensicTranscriber-Setup-x64.exe` | 193 125 697 | `598cbca708ae8ad68a70cbabdea68bcecb9c23a32a4272aed820308b86f2db5e` |
 | `ForensicTranscriber-Portable-x64.zip` | 261 620 674 | `4806da0a0b2ac16a2caf8d23aa6e1c347b6deee7a284249e62266e61ac57c10a` |
-| `ForensicTranscriber-ModelPack-0.1.0.zip` | 574 927 571 | `ef4ff3aa9dbd77d2431d7ff3305e99c33b57dd9bd5d01a9d719bfcda1ef03a1e` |
+| `ForensicTranscriber-ModelPack-0.1.0.zip` | 534 060 311 | `ef4ff3aa9dbd77d2431d7ff3305e99c33b57dd9bd5d01a9d719bfcda1ef03a1e` |
 
 `release/SHA256SUMS.txt` lists all three. The portable zip contains
 `Forensic Transcriber.exe` and `resources/vendor/bin/{whisper-cli.exe,ffmpeg.exe,ffprobe.exe}`.
