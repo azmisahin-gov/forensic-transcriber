@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+release/
+dist/
+build/
+out/
+
+# Vendored native runtime (large; fetched/built by scripts/, never committed)
+vendor/
+
+# Model weights (never committed; see models/README.md and docs/model-notes.md)
+models/*.bin
+models/*.gguf
+models/*.partial
+
+# Local case data / databases produced during development
+*.db
+*.db-wal
+*.db-shm
+.ft-data/
+data/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+.idea/
+.vscode/
+
+# Test scratch
+/tmp-*
+coverage/

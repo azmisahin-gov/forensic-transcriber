@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build whisper.cpp (static, Windows x64)
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp.git build/whisper.cpp
+          cd build/whisper.cpp
+          cmake -B build-static -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build-static --config Release -j"$(nproc)"
+
+      - name: Fetch pinned FFmpeg and stage Windows runtime
+        env:
+          FT_WHISPER_WIN_BIN: ${{ github.workspace }}/build/whisper.cpp/build-static/bin/Release/whisper-cli.exe
+        run: node scripts/fetch-runtime-windows.js
+
+      - name: Lint and unit tests
+        run: |
+          npm run lint
+          node --test tests/unit/*.test.js
+
+      - name: Security check
+        run: node scripts/security-check.js
+
+      - name: Build installer and portable
+        run: npx electron-builder --win nsis zip --x64 --publish never
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum ForensicTranscriber-Setup-x64.exe ForensicTranscriber-Portable-x64.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: forensic-transcriber-windows
+          path: |
+            release/ForensicTranscriber-Setup-x64.exe
+            release/ForensicTranscriber-Portable-x64.zip
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+
+  model-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download default models
+        run: |
+          mkdir -p models
+          curl -sL -o models/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+          curl -sL -o models/ggml-silero-v5.1.2.bin \
+            "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+          echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  models/ggml-large-v3-turbo-q5_0.bin" | sha256sum -c -
+          echo "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf  models/ggml-silero-v5.1.2.bin" | sha256sum -c -
+      - name: Build offline model package
+        run: node scripts/build-model-package.js --models-dir models --out release
+      - name: Upload model package
+        uses: actions/upload-artifact@v4
+        with:
+          name: forensic-transcriber-model-package
+          path: release/ForensicTranscriber-ModelPack-*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [build-windows, model-package]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artefacts
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artefacts/**/*.exe
+            artefacts/**/*.zip
+            artefacts/**/SHA256SUMS.txt
+          generate_release_notes: true

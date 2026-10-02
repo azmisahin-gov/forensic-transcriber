@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forensic Transcriber — 56.12 Local Transcription Workbench</title>
+  <meta name="description" content="Local-first desktop transcription workspace for 56.12 audio transcription workflows. No cloud, no account, no API key. Download for Windows." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234ea1ff'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23061019'%3EFT%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <div class="brand">
+        <span class="logo">FT</span>
+        <span>FORENSIC TRANSCRIBER</span>
+      </div>
+      <h1>Local transcription workbench<br /><span class="accent">for 56.12 audio transcription workflows</span></h1>
+      <p class="lede">
+        Turn recordings into time-aligned transcripts, review them against the audio,
+        correct them, and export — entirely on your own machine.
+      </p>
+      <p class="nocloud">No cloud &nbsp;·&nbsp; No account &nbsp;·&nbsp; No API key &nbsp;·&nbsp; No telemetry</p>
+      <div class="cta">
+        <a id="download-btn" class="btn btn-primary" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download for Windows</a>
+        <a class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Releases</a>
+        <a class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber">Source code</a>
+      </div>
+      <p class="fineprint">
+        The installer is not code-signed, so Windows SmartScreen may warn on first launch.
+        The standard installer does not include a speech model — install one from inside the app,
+        or use the offline model package.
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <section class="wrap">
+      <h2>What is it?</h2>
+      <p>
+        Forensic Transcriber is a Windows desktop application for the expert area
+        <strong>56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi</strong>. It imports a
+        recording, records its technical metadata and a SHA-256, transcribes it locally with
+        <a href="https://github.com/ggml-org/whisper.cpp">whisper.cpp</a>, and gives you a review
+        workspace where every transcript line is tied to the exact moment in the audio.
+      </p>
+      <p class="notice">
+        This software is a technical transcription and review aid. It does not itself constitute a
+        forensic opinion, legal assessment, speaker identification, or authenticity determination.
+        It is <strong>not</strong> a 56.11 forensic audio/video analysis system.
+      </p>
+    </section>
+
+    <section class="wrap">
+      <h2>Why local?</h2>
+      <ul class="cols">
+        <li><strong>Confidentiality.</strong> Recordings never leave the machine. Nothing is uploaded.</li>
+        <li><strong>No account.</strong> No login, no cloud, no API key, no telemetry.</li>
+        <li><strong>Works offline.</strong> The offline model package lets you install, launch and transcribe with no internet.</li>
+        <li><strong>Traceable.</strong> Import hash, metadata and an action history are recorded as software provenance features.</li>
+      </ul>
+    </section>
+
+    <section class="wrap">
+      <h2>How it works</h2>
+      <ol class="flow">
+        <li><span>1</span> New case</li>
+        <li><span>2</span> Import recording (picker or drag-and-drop)</li>
+        <li><span>3</span> Read metadata &amp; hash the original</li>
+        <li><span>4</span> Transcribe locally (GPU or CPU)</li>
+        <li><span>5</span> Click a line → play that exact audio region</li>
+        <li><span>6</span> Edit, split, merge, label speakers, verify</li>
+        <li><span>7</span> Export JSON / TXT / SRT / HTML</li>
+      </ol>
+    </section>
+
+    <section class="wrap">
+      <h2>Download &amp; install</h2>
+      <div class="cards">
+        <div class="card">
+          <h3>Standard release</h3>
+          <p>One installer. Model installed separately from inside the app.</p>
+          <code>ForensicTranscriber-Setup-x64.exe</code>
+        </div>
+        <div class="card">
+          <h3>Portable</h3>
+          <p>Unzip and run. No installation step.</p>
+          <code>ForensicTranscriber-Portable-x64.zip</code>
+        </div>
+        <div class="card">
+          <h3>Offline model package</h3>
+          <p>Default ASR model + VAD, with a checksummed manifest. For air-gapped machines.</p>
+          <code>ForensicTranscriber-ModelPack-*.zip</code>
+        </div>
+      </div>
+      <p>Every release publishes <code>SHA256SUMS.txt</code> for all artefacts.</p>
+      <h3>Quick start</h3>
+      <ol class="steps">
+        <li>Download and run the installer.</li>
+        <li>Open the application and go to <strong>Models → Install</strong>.</li>
+        <li><strong>New case</strong>, then import a recording.</li>
+        <li>Press <strong>Transcribe</strong>.</li>
+        <li>Review each line against the audio, edit, save, export.</li>
+      </ol>
+      <p class="fineprint">
+        You do not need Python, Node.js, Rust, CMake, the CUDA Toolkit or FFmpeg installed.
+        Those are only needed to build the application from source.
+      </p>
+    </section>
+
+    <section class="wrap">
+      <h2>Privacy</h2>
+      <p>
+        No telemetry. No analytics. No login. No account. No audio upload. Case data is stored in a
+        local SQLite database on your machine. The only outbound network call in the whole
+        application is the explicit, checksum-verified model download you trigger.
+      </p>
+      <p class="notice">
+        This site is static documentation and a download portal. Do not upload case material here.
+        This website does not process audio. GitHub, which hosts this page, states that it records
+        visitors' IP addresses for security purposes.
+      </p>
+    </section>
+
+    <section class="wrap">
+      <h2>Limitations</h2>
+      <ul>
+        <li>Automatic output is a first draft and always requires expert review.</li>
+        <li>No speaker identification, diarization-based naming, emotion/lie detection or
+            authenticity analysis — those are out of scope.</li>
+        <li>Video files are accepted only for their audio track.</li>
+        <li>PDF export is not included in this release.</li>
+        <li>Turkish accuracy drops on noisy, overlapping or telephone-quality audio.</li>
+      </ul>
+    </section>
+
+    <section class="wrap">
+      <h2>License</h2>
+      <p>
+        Application code is <strong>AGPL-3.0-only</strong>. Bundled components and models have their
+        own licenses: Electron and whisper.cpp are MIT, FFmpeg is LGPL, and the Whisper/Silero
+        models are MIT. See
+        <a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>.
+      </p>
+    </section>
+
+    <section class="wrap">
+      <h2>Links</h2>
+      <ul class="links">
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber">Source code</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/releases">Releases</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/scope.md">Scope</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/architecture.md">Architecture</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/methodology.md">Methodology</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/security.md">Security</a></li>
+        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/LICENSE">License</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>Forensic Transcriber — local-first transcription workspace for 56.12 audio transcription workflows.</p>
+      <p class="fineprint">Technical transcription and review aid. Not a legal assessment, not speaker identification, not an authenticity determination.</p>
+    </div>
+  </footer>
+
+  <script src="site.js"></script>
+</body>
+</html>

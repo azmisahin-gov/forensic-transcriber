@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: node --test tests/unit/*.test.js
+
+      - name: Security check
+        run: node scripts/security-check.js
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build whisper.cpp (static)
+        run: |
+          git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp.git build/whisper.cpp
+          cd build/whisper.cpp
+          cmake -B build-static -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build-static --config Release -j"$(nproc)"
+
+      - name: Cache models
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-large-v3-turbo-q5_0-v1
+
+      - name: Download models
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -sL -o models/ggml-large-v3-turbo-q5_0.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+          curl -sL -o models/ggml-silero-v5.1.2.bin \
+            "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+          echo "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  models/ggml-large-v3-turbo-q5_0.bin" | sha256sum -c -
+          echo "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf  models/ggml-silero-v5.1.2.bin" | sha256sum -c -
+
+      - name: Generate synthetic Turkish fixture
+        run: node scripts/generate-test-audio.js --minutes 1 --out tests/fixtures/tr-1min.wav
+
+      - name: Integration tests (real pipeline + timestamp contract)
+        env:
+          FT_WHISPER_CLI_PATH: ${{ github.workspace }}/build/whisper.cpp/build-static/bin/whisper-cli
+          FT_TEST_MODEL: ${{ github.workspace }}/models/ggml-large-v3-turbo-q5_0.bin
+          FT_TEST_VAD: ${{ github.workspace }}/models/ggml-silero-v5.1.2.bin
+        run: node --test tests/integration/*.test.js
+
+  package-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build whisper.cpp (static)
+        run: |
+          git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp.git build/whisper.cpp
+          cd build/whisper.cpp
+          cmake -B build-static -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build-static --config Release -j"$(nproc)"
+
+      - name: Vendor runtime
+        env:
+          FT_WHISPER_BIN: ${{ github.workspace }}/build/whisper.cpp/build-static/bin/whisper-cli
+        run: |
+          FT_TARGET_PLATFORM=linux FT_TARGET_ARCH=x64 node scripts/vendor-runtime.js
+
+      - name: Package (linux dir)
+        run: npx electron-builder --linux dir --publish never
+
+      - name: Smoke test packaged app
+        run: |
+          sudo apt-get install -y xvfb
+          FT_DATA_DIR=/tmp/ft-data FT_MODELS_DIR=${{ github.workspace }}/models \
+            xvfb-run -a ./release/linux-unpacked/forensic-transcriber --smoke-test --no-sandbox

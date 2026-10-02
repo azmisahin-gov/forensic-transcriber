@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-10-02T17:12:55.712Z",
+  "host": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu_model": "AMD EPYC 9B14",
+    "total_mem_mb": 15990,
+    "gpu": null
+  },
+  "whisper_binary": "/workspace/build/whisper.cpp/build-static/bin/whisper-cli",
+  "device": "cpu",
+  "vad": true,
+  "runs": [
+    {
+      "model_id": "large-v3-turbo-q5_0",
+      "file": "tr-1min.wav",
+      "device": "cpu",
+      "processing_seconds": 71.29,
+      "audio_seconds": 60,
+      "rtf": 1.188,
+      "peak_rss_mb": 854,
+      "segments": 11
+    },
+    {
+      "model_id": "large-v3-turbo-q5_0",
+      "file": "tr-5min.wav",
+      "device": "cpu",
+      "processing_seconds": 362.413,
+      "audio_seconds": 300,
+      "rtf": 1.208,
+      "peak_rss_mb": 950,
+      "segments": 58
+    },
+    {
+      "model_id": "small-q5_1",
+      "file": "tr-1min.wav",
+      "device": "cpu",
+      "processing_seconds": 24.493,
+      "audio_seconds": 60,
+      "rtf": 0.408,
+      "peak_rss_mb": 533,
+      "segments": 11
+    },
+    {
+      "model_id": "small-q5_1",
+      "file": "tr-5min.wav",
+      "device": "cpu",
+      "processing_seconds": 207.408,
+      "audio_seconds": 300,
+      "rtf": 0.691,
+      "peak_rss_mb": 614,
+      "segments": 56
+    }
+  ]
+}
