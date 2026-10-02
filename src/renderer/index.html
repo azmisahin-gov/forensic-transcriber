@@ -20,6 +20,9 @@
       </div>
       <div class="topbar-actions">
         <span id="model-badge" class="badge badge-muted">Checking model…</span>
+        <span id="update-badge" class="badge badge-muted hidden"></span>
+        <button id="btn-update" class="btn btn-ghost hidden" type="button">Update</button>
+        <button id="btn-about" class="btn btn-ghost" type="button">About</button>
         <button id="btn-models" class="btn btn-ghost" type="button">Models</button>
         <button id="btn-new-case" class="btn btn-primary" type="button">New case</button>
       </div>
@@ -194,6 +197,38 @@
       <h2>Models</h2>
       <p class="muted small">Models are not bundled with the standard installer. Install a model package to begin.</p>
       <div id="model-list" class="model-list"></div>
+      <menu>
+        <button value="cancel" class="btn">Close</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-about" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>About &amp; updates</h2>
+      <dl class="about-grid" id="about-info"></dl>
+
+      <h3>Application updates</h3>
+      <p class="muted small">
+        Updates are delivered from GitHub Releases over HTTPS. Nothing is downloaded or installed
+        without your action, and an update never touches your case data or your speech model.
+      </p>
+      <div id="update-panel" class="update-panel">
+        <p id="update-status" class="small muted">Not checked yet.</p>
+        <div id="update-progress-wrap" class="progress-wrap hidden">
+          <div class="progress-track"><div id="update-progress-bar" class="progress-bar"></div></div>
+          <span id="update-progress-label" class="small muted"></span>
+        </div>
+        <p id="update-error" class="error hidden"></p>
+        <div class="update-actions">
+          <button id="btn-update-check" class="btn btn-small" type="button">Check for updates</button>
+          <button id="btn-update-download" class="btn btn-small btn-primary hidden" type="button">Download update</button>
+          <button id="btn-update-postpone" class="btn btn-small hidden" type="button">Postpone</button>
+          <button id="btn-update-install" class="btn btn-small btn-primary hidden" type="button">Restart and install</button>
+          <button id="btn-update-release-notes" class="btn btn-small btn-ghost hidden" type="button">Release page</button>
+        </div>
+      </div>
+
       <menu>
         <button value="cancel" class="btn">Close</button>
       </menu>

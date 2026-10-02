@@ -14,7 +14,12 @@ const { ModelManager } = require('./services/model-manager');
 const { WhisperAdapter } = require('./services/whisper');
 const { RuntimeSelector } = require('./services/runtime-selector');
 const { runExport } = require('./services/exporter');
+const { createUpdater, STATES: UPDATE_STATES } = require('./services/updater');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
+
+// Update source. Pinned here and in package.json build.publish; the updater
+// only ever fetches from this repository's GitHub Releases over HTTPS.
+const UPDATE_REPOSITORY = 'azmisahin-gov/forensic-transcriber';
 
 const MEDIA_SCHEME = 'ft-media';
 const MIME = {
@@ -56,6 +61,46 @@ let engineProbeCache = null;
 
 /** Active transcription jobs keyed by webContents id. */
 const jobs = new Map();
+
+/** Application auto-updater (Windows only; created lazily on first use). */
+let updater = null;
+
+/**
+ * The updater is only meaningful for the packaged NSIS build on Windows.
+ * In development, in tests and on other platforms it stays disabled so nothing
+ * ever contacts the update feed unexpectedly.
+ */
+function updaterEnabled() {
+  if (process.platform !== 'win32') return false;
+  if (process.env.FT_DISABLE_UPDATER === '1') return false;
+  if (!app.isPackaged) return false;
+  return true;
+}
+
+function ensureUpdater() {
+  if (updater) return updater;
+  if (!updaterEnabled()) return null;
+  updater = createUpdater({
+    repository: UPDATE_REPOSITORY,
+    getCurrentVersion: () => app.getVersion(),
+    logger,
+    on: (state) => send(IPC.UPDATE_STATUS, state),
+  });
+  return updater;
+}
+
+/** State reported to the renderer; always safe to call, even when disabled. */
+function updateStateForRenderer() {
+  if (updater) return updater.controller.state;
+  return {
+    status: UPDATE_STATES.IDLE,
+    currentVersion: app.getVersion(),
+    availableVersion: null,
+    downloadPercent: 0,
+    error: null,
+    enabled: false,
+  };
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -249,6 +294,60 @@ function registerIpc() {
     };
     return engineProbeCache;
   });
+
+  // ---------------------------------------------------------------- updates
+  // Application auto-update. Windows + packaged only; when disabled the state
+  // reports enabled:false and the actions are no-ops, so nothing is ever
+  // downloaded or installed unexpectedly.
+  handle(IPC.UPDATE_STATE, async () => updateStateForRenderer());
+
+  handle(IPC.UPDATE_CHECK, async () => {
+    const u = ensureUpdater();
+    if (!u) return { enabled: false, state: updateStateForRenderer() };
+    try {
+      await u.check();
+    } catch (err) {
+      // A failed check must never break the running application.
+      u.controller.fail(err && err.message ? err.message : 'Update check failed.');
+    }
+    return { enabled: true, state: u.controller.state };
+  });
+
+  handle(IPC.UPDATE_DOWNLOAD, async () => {
+    const u = ensureUpdater();
+    if (!u) return { enabled: false, state: updateStateForRenderer() };
+    try {
+      await u.download();
+    } catch (err) {
+      u.controller.fail(err && err.message ? err.message : 'Update download failed.');
+    }
+    return { enabled: true, state: u.controller.state };
+  });
+
+  handle(IPC.UPDATE_POSTPONE, async () => {
+    const u = ensureUpdater();
+    if (!u) return { enabled: false, state: updateStateForRenderer() };
+    u.controller.postpone();
+    return { enabled: true, state: u.controller.state };
+  });
+
+  handle(IPC.UPDATE_INSTALL, async () => {
+    const u = ensureUpdater();
+    if (!u) return { ok: false, reason: 'UPDATER_DISABLED' };
+    const result = u.quitAndInstall();
+    if (!result.ok) return { ok: false, reason: result.reason };
+    if (logger) logger.info('update: installing and restarting');
+    return { ok: true };
+  });
+
+  // Check for an update shortly after startup, but never download or install
+  // without the user's explicit action.
+  if (updaterEnabled()) {
+    setTimeout(() => {
+      const u = ensureUpdater();
+      if (u) u.check().catch((err) => u.controller.fail(err && err.message ? err.message : 'Update check failed.'));
+    }, 8000);
+  }
 
   handle(IPC.PATHS, async () => ({
     dataDir: userDataDir(),
@@ -588,6 +687,17 @@ async function runSmokeTest() {
     const probe = await mainWindow.webContents.executeJavaScript('window.ft.app.probeEngine()');
     step('engine probe reachable', probe && probe.ok === true && 'cpuBinary' in probe.data);
     step('engine reports gpuRuntimeBundled flag', typeof probe.data.gpuRuntimeBundled === 'boolean');
+
+    // Update surface: the preload API exists and reports a safe state. On
+    // non-Windows or unpackaged builds the updater is explicitly disabled, so a
+    // check must not contact the network.
+    const upd = await mainWindow.webContents.executeJavaScript('window.ft.updates.state()');
+    step('update state reachable', upd && upd.ok === true && typeof upd.data.status === 'string');
+    const updCheck = await mainWindow.webContents.executeJavaScript('window.ft.updates.check()');
+    step('update check is safe when disabled', updCheck && updCheck.ok === true);
+    if (process.platform !== 'win32') {
+      step('updater disabled off-Windows', updCheck.data.enabled === false);
+    }
 
     report.ok = report.steps.every((s) => s.ok);
   } catch (err) {

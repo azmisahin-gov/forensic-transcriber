@@ -1,8 +1,65 @@
 # Project state
 
-CURRENT_PHASE: P10 — release hardening
+CURRENT_PHASE: P11 — release lifecycle
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
 LAST_UPDATED: 2026-10-02
+
+## What this phase added
+
+- **Semantic versioning** (`src/shared/versioning.js`): parse, compare, bump,
+  tag formatting, tag/version consistency, duplicate-tag detection.
+- **Controlled bump** (`scripts/bump-version.js`): updates `package.json`,
+  `package-lock.json` and `CHANGELOG.md`; refuses duplicate tags and invalid
+  types; `--dry-run` supported.
+- **Release (version) workflow**: manual `workflow_dispatch` with
+  patch/minor/major; commits the bump, tags `vX.Y.Z`, calls the build/publish
+  workflow. Normal development never releases.
+- **Release (build & publish) workflow** (reusable): re-verifies tag/version
+  consistency, builds on `windows-latest`, validates `latest.yml`, refuses an
+  incomplete or wrong-platform artefact set, writes `SHA256SUMS.txt`, publishes.
+- **Windows auto-update** via `electron-updater` from GitHub Releases: check,
+  postpone, download with progress, restart-and-install only on explicit
+  confirmation. Never automatic, never touches case data or the speech model.
+- **Update UX**: About & updates dialog, topbar badge, update states.
+
+## Verified in this environment
+
+- Unit tests: 99/99 pass (`node --test tests/unit/*.test.js`), including 40 new
+  tests for versioning, the bump transforms, the updater state machine and
+  updater-metadata validation.
+- Integration tests: 4/4 pipeline + 15/15 red-team + 4/4 update-data-safety.
+- Lint: 0 problems (44 files).
+- Security check: 0 critical findings.
+- Packaged-app smoke test: 14/14 steps (now covers the update surface).
+- Packaged-app acceptance test: 20/20 steps.
+- Release gate: **12/12 pass**.
+- `latest.yml` from a real Windows build validates and its sha512 matches the
+  installer exactly (verified with `node:crypto`).
+
+## Not verified in this environment (known limitations)
+
+- **No end-to-end auto-update run.** A real update needs a published release and
+  a Windows installation. What is verified here is the configuration, the state
+  machine, the metadata and the safety properties — not a live update.
+- **Not verified on target NVIDIA hardware** (no GPU/CUDA toolkit available).
+- **The Windows installer was not launched on real Windows hardware** here; the
+  binaries were validated under Wine.
+- **The published v0.1.0 release is not distributable.** It contains only GitHub's
+  source archives because the earlier Windows run failed. No new tag was created
+  by this phase.
+- **No code signing.** The updater's integrity check is the sha512 in
+  `latest.yml`, not a publisher signature.
+- Accuracy is a **synthetic benchmark**, not a human corpus.
+
+## Next exact action
+
+Merge this branch, then run the **Release (version)** workflow with `patch` to
+produce a real `v0.1.1` release, and confirm on a Windows machine that the
+installed application detects and installs it.
+
+VERIFICATION_STATUS: automated and packaged-app validation complete; live
+auto-update and target-machine validation outstanding and marked unverified.
+
 
 ## What changed in the release-hardening pass
 

@@ -22,13 +22,17 @@
     "build": "electron-builder",
     "vendor:runtime": "node scripts/vendor-runtime.js",
     "package:model": "node scripts/build-model-package.js",
-    "verify:release": "node scripts/verify-release.js"
+    "verify:release": "node scripts/verify-release.js",
+    "release:bump": "node scripts/bump-version.js",
+    "verify:updater-metadata": "node scripts/verify-updater-metadata.js"
   },
   "devDependencies": {
     "electron": "44.5.1",
     "electron-builder": "26.15.3"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "build": {
     "appId": "gov.azmisahin.forensictranscriber",
     "productName": "Forensic Transcriber",
@@ -45,13 +49,33 @@
       {
         "from": "vendor/${os}-${arch}",
         "to": "vendor",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "azmisahin-gov",
+        "repo": "forensic-transcriber",
+        "releaseType": "release"
       }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "ForensicTranscriber-Portable-x64.${ext}"
     },
@@ -68,7 +92,9 @@
       "artifactName": "ForensicTranscriber-Portable-x64.${ext}"
     },
     "linux": {
-      "target": ["dir"],
+      "target": [
+        "dir"
+      ],
       "category": "AudioVideo"
     }
   }

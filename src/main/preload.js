@@ -14,6 +14,18 @@ const api = {
     paths: () => ipcRenderer.invoke(IPC.PATHS),
     probeEngine: () => ipcRenderer.invoke(IPC.APP_ENGINE_PROBE),
   },
+  updates: {
+    state: () => ipcRenderer.invoke(IPC.UPDATE_STATE),
+    check: () => ipcRenderer.invoke(IPC.UPDATE_CHECK),
+    download: () => ipcRenderer.invoke(IPC.UPDATE_DOWNLOAD),
+    postpone: () => ipcRenderer.invoke(IPC.UPDATE_POSTPONE),
+    install: () => ipcRenderer.invoke(IPC.UPDATE_INSTALL),
+    onStatus: (cb) => {
+      const listener = (_event, payload) => cb(payload);
+      ipcRenderer.on(IPC.UPDATE_STATUS, listener);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_STATUS, listener);
+    },
+  },
   cases: {
     create: (input) => ipcRenderer.invoke(IPC.CASE_CREATE, input),
     list: () => ipcRenderer.invoke(IPC.CASE_LIST),
