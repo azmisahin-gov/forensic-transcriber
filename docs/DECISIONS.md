@@ -1,0 +1,137 @@
+# DECISIONS
+
+Architecture decision record. Each decision lists the options considered, the
+evidence used, and the choice made. Decisions are closed once made.
+
+## D1 — Scope: 56.12, not 56.11
+
+**Context.** The repository is for the Turkish Ministry of Justice expert
+classification area 56.12 "Ses Kayıtlarının Metin Haline Dönüştürülmesi". 56.11
+"Adli Ses ve Görüntü İnceleme ve Çözümlemeleri" is a separate specialty.
+
+**Decision.** The product implements 56.12 only: transcription of speech into
+text plus human review. Speaker identification, voice comparison, biometric
+voice recognition, deepfake/manipulation detection, emotion/sentiment/lie
+analysis, threat/crime classification and legal interpretation are explicitly
+out of scope and are documented as such. Video input is accepted only for its
+audio track.
+
+## D2 — Desktop stack: Electron
+
+**Options evaluated (Oct 2026):** Electron 44.x, Tauri 2.x, Wails 2.12, Flutter
+Desktop.
+
+**Evidence.**
+- Tauri 2 has the strongest security model (capability/permission scoped, `fs`
+  closed by default) and the smallest bundles, but its backend is Rust.
+- The native runtime for this product is C/C++ (whisper.cpp) and FFmpeg. Both
+  are already shipped as child-process binaries, so a Rust backend adds no
+  capability we do not already have.
+- Electron ships a Chromium/WebCodecs media stack and the `Range`-aware custom
+  protocol needed for sample-accurate audio seeking, with a mature
+  `electron-builder` NSIS/portable pipeline and well-understood code-signing.
+- Electron 44.x is the current stable line (Chromium 150, Node 24).
+
+**Decision.** Electron 44 with `electron-builder` 26. Security is enforced by
+the same discipline Tauri would require: `contextIsolation: true`,
+`nodeIntegration: false`, a Content-Security-Policy that forbids remote scripts
+and network connections, a narrow preload API, no arbitrary filesystem or shell
+exposure, and navigation/window-open handlers that hand external links to the OS
+browser. A future Rust/Tauri port is not blocked: the main-process services are
+plain CommonJS with no Electron dependency except path resolution.
+
+## D3 — ASR engine: whisper.cpp
+
+**Options evaluated:** whisper.cpp v1.9.4, faster-whisper v1.2.1, WhisperX,
+plus the hosted-style alternatives (Parakeet, Canary) for reference.
+
+**Evidence.**
+- All Whisper-family runtimes load the same weights, so transcription accuracy
+  is essentially identical; the choice is about packaging and deployment.
+- whisper.cpp is a dependency-free C/C++ implementation with a static binary,
+  CUDA support, a native VAD path, quantization and a CPU fallback — exactly the
+  profile needed for a single Windows installer with no Python runtime.
+- faster-whisper is faster on GPU in Python but requires a Python + PyTorch +
+  CUDA stack, which is unacceptable for the end-user packaging constraint
+  (section 8: the user must not install Python or CUDA Toolkit).
+- whisper.cpp also emits token-level timestamps and per-token probabilities,
+  which this product uses for real (not fabricated) confidence values.
+
+**Decision.** whisper.cpp **v1.9.4** (2026-09-11), invoked as `whisper-cli` over
+a prepared 16 kHz mono WAV. Engine adapter: `src/main/services/whisper.js`.
+
+## D4 — Model: Whisper large-v3-turbo, q5_0 by default
+
+**Options evaluated:** `large-v3`, `large-v3-turbo` (f16), `large-v3-turbo-q8_0`,
+`large-v3-turbo-q5_0`, `small`.
+
+**Evidence (Turkish, FLEURS-TR, published benchmarks).**
+| Model | WER % | CER % | Notes |
+| --- | --- | --- | --- |
+| Whisper large-v3 | 7.08 | 1.50 | Best accuracy, ~2× slower than turbo |
+| Whisper large-v3-turbo | 7.75 | 1.66 | Near-large-v3 accuracy, much faster |
+| Whisper small | 15.12 | 3.49 | Substantially worse on Turkish |
+
+`large-v3-turbo-q5_0` is 574 041 195 bytes (547 MiB) and fits comfortably in
+6 GB VRAM; `q8_0` is 874 188 075 bytes (834 MiB). The size/accuracy trade-off of
+q5_0 against f16 is small and the throughput gain is real on the target GPU.
+
+**Decision.** Default model `large-v3-turbo-q5_0`; `q8_0`, f16 and `small`
+remain selectable. The default is a starting point, not a claim of "best";
+operators can change it per case. See `docs/model-notes.md` for provenance and
+`docs/benchmarks.json` for measured numbers.
+
+## D5 — Storage: SQLite via `node:sqlite`
+
+**Options evaluated:** `node:sqlite` (built-in), better-sqlite3, sql.js.
+
+**Decision.** The built-in `node:sqlite` (`DatabaseSync`). It is synchronous,
+needs no native rebuild step per platform, and avoids a third-party native
+dependency. No server database (PostgreSQL/MongoDB/Redis) is used: cases must
+open offline.
+
+## D6 — Media decode: FFmpeg as a child process
+
+**Decision.** FFmpeg/FFprobe are invoked as separate processes with an argument
+array (`shell: false`), never a shell string, so a crafted file name cannot be
+interpreted as a command. The Windows build ships a pinned, checksum-verified
+**LGPL** FFmpeg build; LGPL is sufficient because the binary is executed as a
+separate program and not linked into the application.
+
+## D7 — Timestamp contract: original timeline is canonical
+
+**Decision.** Every segment stores `start`/`end` in seconds on the **original**
+recording's timeline. The engine's internal chunk/VAD timeline is never exposed.
+VAD is used to tighten boundaries to the real speech onsets. An automated
+integration test asserts that known spoken events land in their expected
+intervals; a failing test blocks the release (see `docs/VERIFICATION.md`).
+
+## D8 — Status model preserves machine vs. expert output
+
+**Decision.** Segments carry `AUTOMATIC | REVIEWED | EDITED | VERIFIED`.
+Editing never overwrites the automatic version irrecoverably (undo history keeps
+it) and every export reports the status per segment and the count of
+human-reviewed segments.
+
+## D9 — Diarization is optional and never identifies people
+
+**Decision.** MVP ships manual speaker labels (`SPEAKER_01`, `SPEAKER_02`, …)
+and free-form custom labels. Automatic diarization is a documented roadmap item,
+must degrade gracefully, and may only ever emit `SPEAKER_NN` — never a name.
+
+## D10 — Repository layout
+
+Single repository, single application. `src/main`, `src/renderer`,
+`src/shared`, `scripts`, `tests`, `site`, `docs`. No package explosion. The
+original suggested `app/` directory is realized as `src/`.
+
+## Rejected alternatives (summary)
+
+| Rejected | Reason |
+| --- | --- |
+| Tauri/Wails | Rust/Go backend adds no capability; the native runtime is already C/C++. |
+| faster-whisper / WhisperX | Requires Python + PyTorch + CUDA on the end-user machine. |
+| Bundling models in the installer | Inflates every download; models change independently. Offline package instead. |
+| Committing models to the repository | Binary bloat and license mixing; models have their own provenance. |
+| Server database / cloud | Violates the offline-first, no-account requirement. |
+| Browser (WebGPU) transcription | WebGPU is not baseline across browsers; the real workflow must be a desktop app. |

@@ -1,0 +1,75 @@
+{
+  "name": "forensic-transcriber",
+  "version": "0.1.0",
+  "description": "Local-first transcription workspace for 56.12 audio transcription workflows",
+  "author": {
+    "name": "Forensic Transcriber Contributors",
+    "email": "noreply@example.invalid"
+  },
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "main": "src/main/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "test": "node --test tests/unit/*.test.js tests/integration/*.test.js",
+    "test:unit": "node --test tests/unit/*.test.js",
+    "test:integration": "node --test tests/integration/*.test.js",
+    "lint": "node scripts/lint.js",
+    "build:win": "node scripts/build-windows.js",
+    "build:linux": "electron-builder --linux dir",
+    "build": "electron-builder",
+    "vendor:runtime": "node scripts/vendor-runtime.js",
+    "package:model": "node scripts/build-model-package.js",
+    "verify:release": "node scripts/verify-release.js"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {},
+  "build": {
+    "appId": "gov.azmisahin.forensictranscriber",
+    "productName": "Forensic Transcriber",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/${os}-${arch}",
+        "to": "vendor",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "zip", "arch": ["x64"] }
+      ],
+      "artifactName": "ForensicTranscriber-Portable-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Forensic Transcriber",
+      "artifactName": "ForensicTranscriber-Setup-x64.${ext}"
+    },
+    "portable": {
+      "artifactName": "ForensicTranscriber-Portable-x64.${ext}"
+    },
+    "linux": {
+      "target": ["dir"],
+      "category": "AudioVideo"
+    }
+  }
+}

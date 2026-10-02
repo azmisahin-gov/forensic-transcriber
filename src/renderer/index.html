@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src ft-media:; font-src 'self'; connect-src ft-media:; form-action 'none'; base-uri 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Forensic Transcriber</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app" class="app" aria-hidden="true">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">FT</span>
+        <div class="brand-text">
+          <strong>Forensic Transcriber</strong>
+          <span id="scope-label">56.12 Local Transcription Workbench</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="model-badge" class="badge badge-muted">Checking model…</span>
+        <button id="btn-models" class="btn btn-ghost" type="button">Models</button>
+        <button id="btn-new-case" class="btn btn-primary" type="button">New case</button>
+      </div>
+    </header>
+
+    <nav class="sidebar" aria-label="Cases">
+      <div class="sidebar-head">
+        <h2>Cases</h2>
+        <button id="btn-refresh-cases" class="btn btn-icon" title="Refresh" type="button">⟳</button>
+      </div>
+      <ul id="case-list" class="case-list"></ul>
+      <div class="sidebar-foot">
+        <div id="storage-info" class="muted small"></div>
+        <button id="btn-open-datadir" class="btn btn-ghost btn-small" type="button">Data folder</button>
+      </div>
+    </nav>
+
+    <main class="workspace">
+      <section id="empty-state" class="empty-state">
+        <h1>Local-first transcription workspace</h1>
+        <p class="lede">For 56.12 audio transcription workflows. No cloud. No account. No API key.</p>
+        <ol class="flow">
+          <li>Create a case</li>
+          <li>Import a recording</li>
+          <li>Transcribe locally</li>
+          <li>Review against the audio</li>
+          <li>Edit, verify and export</li>
+        </ol>
+        <p class="muted small">
+          This software is a technical transcription and review aid. It does not itself constitute a
+          forensic opinion, legal assessment, speaker identification, or authenticity determination.
+        </p>
+      </section>
+
+      <section id="case-view" class="case-view hidden">
+        <div class="case-header">
+          <div>
+            <h1 id="case-title">—</h1>
+            <div id="case-subtitle" class="muted small"></div>
+          </div>
+          <div class="case-header-actions">
+            <button id="btn-save" class="btn btn-primary" type="button" disabled>Save</button>
+            <button id="btn-export" class="btn" type="button" disabled>Export</button>
+          </div>
+        </div>
+
+        <div class="panes">
+          <aside class="evidence-pane">
+            <div class="pane-head">
+              <h2>Evidence</h2>
+              <button id="btn-import" class="btn btn-small" type="button">Import</button>
+            </div>
+            <ul id="evidence-list" class="evidence-list"></ul>
+            <div id="drop-zone" class="drop-zone">
+              <p>Drop audio or video here</p>
+              <p class="muted small">WAV · MP3 · M4A · FLAC · OGG · MP4 · MOV · MKV</p>
+            </div>
+          </aside>
+
+          <div class="review-pane">
+            <div id="review-placeholder" class="review-placeholder">
+              <p>Select an imported recording to inspect metadata and transcribe.</p>
+            </div>
+
+            <div id="review" class="review hidden">
+              <section class="meta-panel">
+                <h3 id="ev-name">—</h3>
+                <dl class="meta-grid" id="ev-meta"></dl>
+                <div class="meta-actions">
+                  <button id="btn-reveal" class="btn btn-small" type="button">Show original</button>
+                  <button id="btn-delete-evidence" class="btn btn-small btn-danger" type="button">Remove</button>
+                </div>
+              </section>
+
+              <section class="transcribe-panel">
+                <div class="transcribe-row">
+                  <label class="field">
+                    <span>Model</span>
+                    <select id="select-model"></select>
+                  </label>
+                  <label class="field field-inline">
+                    <input type="checkbox" id="chk-gpu" checked />
+                    <span>Use GPU if available</span>
+                  </label>
+                  <label class="field field-inline">
+                    <input type="checkbox" id="chk-vad" checked />
+                    <span>Voice activity detection</span>
+                  </label>
+                  <button id="btn-transcribe" class="btn btn-primary" type="button">Transcribe</button>
+                  <button id="btn-cancel" class="btn btn-danger hidden" type="button">Cancel</button>
+                </div>
+                <div id="progress-wrap" class="progress-wrap hidden">
+                  <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+                  <span id="progress-label" class="small muted">Preparing…</span>
+                </div>
+                <p id="transcribe-error" class="error hidden"></p>
+              </section>
+
+              <section class="player-panel">
+                <canvas id="waveform" class="waveform" height="96"></canvas>
+                <div class="player-controls">
+                  <button id="btn-play" class="btn btn-icon" title="Play / Pause (Space)" type="button">▶</button>
+                  <button id="btn-back5" class="btn btn-icon" title="Back 5s (←)" type="button">−5s</button>
+                  <button id="btn-fwd5" class="btn btn-icon" title="Forward 5s (→)" type="button">+5s</button>
+                  <span id="time-display" class="mono">00:00:00.000</span>
+                  <label class="field field-inline">
+                    <span>Speed</span>
+                    <select id="select-speed">
+                      <option value="0.5">0.5×</option>
+                      <option value="0.75">0.75×</option>
+                      <option value="1" selected>1×</option>
+                      <option value="1.25">1.25×</option>
+                      <option value="1.5">1.5×</option>
+                      <option value="2">2×</option>
+                    </select>
+                  </label>
+                  <span class="spacer"></span>
+                  <label class="field field-inline">
+                    <span>Speakers</span>
+                    <input id="speaker-input" class="input input-small" type="text" placeholder="SPEAKER_01,SPEAKER_02" />
+                  </label>
+                </div>
+              </section>
+
+              <section class="transcript-panel">
+                <div class="transcript-toolbar">
+                  <h3>Transcript</h3>
+                  <span id="transcript-stats" class="muted small"></span>
+                  <span class="spacer"></span>
+                  <button id="btn-undo" class="btn btn-small" title="Undo (Ctrl+Z)" type="button" disabled>Undo</button>
+                  <button id="btn-redo" class="btn btn-small" title="Redo (Ctrl+Shift+Z)" type="button" disabled>Redo</button>
+                </div>
+                <div id="transcript-list" class="transcript-list"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <dialog id="dialog-new-case" class="dialog">
+    <form method="dialog">
+      <h2>New case</h2>
+      <label class="field"><span>Title</span><input id="new-case-title" class="input" required maxlength="200" /></label>
+      <label class="field"><span>Notes</span><textarea id="new-case-notes" class="input" rows="3"></textarea></label>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-create-case" value="default" class="btn btn-primary">Create</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-models" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>Models</h2>
+      <p class="muted small">Models are not bundled with the standard installer. Install a model package to begin.</p>
+      <div id="model-list" class="model-list"></div>
+      <menu>
+        <button value="cancel" class="btn">Close</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-export" class="dialog">
+    <form method="dialog">
+      <h2>Export transcript</h2>
+      <p class="muted small">Output is a working draft generated by this software, not an official report template.</p>
+      <div class="checkbox-row">
+        <label><input type="checkbox" class="exp-format" value="json" checked /> JSON</label>
+        <label><input type="checkbox" class="exp-format" value="txt" checked /> TXT</label>
+        <label><input type="checkbox" class="exp-format" value="srt" checked /> SRT</label>
+        <label><input type="checkbox" class="exp-format" value="html" checked /> HTML</label>
+      </div>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-run-export" value="default" class="btn btn-primary">Export</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-confirm" class="dialog">
+    <form method="dialog">
+      <h2 id="confirm-title">Confirm</h2>
+      <p id="confirm-message"></p>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-confirm-yes" value="default" class="btn btn-danger">Confirm</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="lib/format.js"></script>
+  <script src="lib/transcript-store.js"></script>
+  <script src="lib/audio.js"></script>
+  <script src="lib/waveform.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

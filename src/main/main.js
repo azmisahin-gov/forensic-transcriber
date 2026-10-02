@@ -1,0 +1,682 @@
+'use strict';
+
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Readable } = require('node:stream');
+
+const { IPC, SUPPORTED_EXTENSIONS, HISTORY_ACTIONS } = require('../shared/constants');
+const { DEFAULT_ASR_MODEL_ID, DEFAULT_VAD_MODEL_ID, getModel } = require('../shared/model-registry');
+const { Storage } = require('./services/storage');
+const { Logger } = require('./services/logger');
+const { MediaService } = require('./services/media');
+const { ModelManager } = require('./services/model-manager');
+const { WhisperAdapter } = require('./services/whisper');
+const { runExport } = require('./services/exporter');
+const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
+
+const MEDIA_SCHEME = 'ft-media';
+const MIME = {
+  '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.mp4': 'video/mp4',
+  '.flac': 'audio/flac', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg',
+  '.aac': 'audio/aac', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm', '.wma': 'audio/x-ms-wma', '.aiff': 'audio/aiff', '.aif': 'audio/aiff',
+  '.amr': 'audio/amr', '.m4b': 'audio/mp4',
+};
+
+// Only ft-media is privileged. It is a standard, secure, streaming scheme so
+// the renderer can seek audio, but it only ever resolves evidence ids that
+// exist in the local database — arbitrary paths are never exposed.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: MEDIA_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
+let mainWindow = null;
+let storage = null;
+let logger = null;
+let media = null;
+let modelManager = null;
+let whisper = null;
+
+/** Active transcription jobs keyed by webContents id. */
+const jobs = new Map();
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1360,
+    height: 900,
+    minWidth: 960,
+    minHeight: 640,
+    backgroundColor: '#10151c',
+    title: 'Forensic Transcriber',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      webSecurity: true,
+      spellcheck: false,
+    },
+  });
+
+  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.argv.includes('--dev')) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  }
+
+  // The app is offline-first: never let the renderer navigate away or open
+  // arbitrary windows. External links are handed to the OS browser explicitly.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith('file://')) {
+      event.preventDefault();
+      if (/^https?:/.test(url)) shell.openExternal(url);
+    }
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+}
+
+function send(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+function toErrorPayload(err) {
+  return {
+    code: err && err.code ? err.code : 'ERROR',
+    message: err && err.message ? err.message : String(err),
+    detail: err && err.detail ? err.detail : undefined,
+    expected: err && err.expected ? err.expected : undefined,
+    actual: err && err.actual ? err.actual : undefined,
+  };
+}
+
+function handle(channel, fn) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    try {
+      const data = await fn(event, ...args);
+      return { ok: true, data };
+    } catch (err) {
+      if (logger) logger.error(`IPC ${channel} failed`, toErrorPayload(err));
+      return { ok: false, error: toErrorPayload(err) };
+    }
+  });
+}
+
+function requireCase(caseId) {
+  const kase = storage.getCase(caseId);
+  if (!kase) {
+    const err = new Error(`Case not found: ${caseId}`);
+    err.code = 'CASE_NOT_FOUND';
+    throw err;
+  }
+  return kase;
+}
+
+async function resolveEvidenceFile(evidenceId) {
+  const ev = storage.getEvidence(evidenceId);
+  if (!ev) {
+    const err = new Error('Evidence not found.');
+    err.code = 'EVIDENCE_NOT_FOUND';
+    throw err;
+  }
+  return ev;
+}
+
+/** Resolve the audio file used for playback: derived working copy if present, else original. */
+function playbackPath(ev) {
+  if (ev.derived_path && fs.existsSync(ev.derived_path)) return ev.derived_path;
+  return ev.original_path;
+}
+
+function registerMediaProtocol() {
+  protocol.handle(MEDIA_SCHEME, async (request) => {
+    try {
+      const url = new URL(request.url);
+      const evidenceId = decodeURIComponent(url.pathname.replace(/^\//, '')) || url.hostname;
+      const ev = storage.getEvidence(evidenceId);
+      if (!ev) return new Response('Not found', { status: 404 });
+      const filePath = playbackPath(ev);
+      if (!fs.existsSync(filePath)) return new Response('Not found', { status: 404 });
+
+      const stat = fs.statSync(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = MIME[ext] || 'application/octet-stream';
+      const range = request.headers.get('range');
+
+      if (range) {
+        const match = /bytes=(\d*)-(\d*)/.exec(range);
+        if (match) {
+          const start = match[1] ? Number(match[1]) : 0;
+          const end = match[2] ? Number(match[2]) : stat.size - 1;
+          const safeStart = Math.max(0, Math.min(start, stat.size - 1));
+          const safeEnd = Math.max(safeStart, Math.min(end, stat.size - 1));
+          const stream = fs.createReadStream(filePath, { start: safeStart, end: safeEnd });
+          return new Response(Readable.toWeb(stream), {
+            status: 206,
+            headers: {
+              'Content-Type': contentType,
+              'Content-Length': String(safeEnd - safeStart + 1),
+              'Content-Range': `bytes ${safeStart}-${safeEnd}/${stat.size}`,
+              'Accept-Ranges': 'bytes',
+              'Cache-Control': 'no-store',
+              'Access-Control-Allow-Origin': '*',
+            },
+          });
+        }
+      }
+
+      const stream = fs.createReadStream(filePath);
+      return new Response(Readable.toWeb(stream), {
+        status: 200,
+        headers: {
+          'Content-Type': contentType,
+          'Content-Length': String(stat.size),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-store',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    } catch (err) {
+      if (logger) logger.error('media protocol error', toErrorPayload(err));
+      return new Response('Internal error', { status: 500 });
+    }
+  });
+}
+
+function registerIpc() {
+  handle(IPC.APP_INFO, async () => {
+    const mediaStatus = await media.available();
+    const models = await modelManager.list();
+    return {
+      name: 'Forensic Transcriber',
+      version: app.getVersion(),
+      scope: '56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi',
+      platform: process.platform,
+      arch: process.arch,
+      electron: process.versions.electron,
+      node: process.versions.node,
+      dataDir: userDataDir(),
+      modelsDir: modelsDir(),
+      engine: whisper.describe(),
+      engineVersion: await whisper.version(),
+      media: mediaStatus,
+      modelReady: models.some((m) => m.kind === 'asr' && m.installed && m.verified),
+      defaultModelId: DEFAULT_ASR_MODEL_ID,
+      supportedExtensions: SUPPORTED_EXTENSIONS,
+      storage: storage.stats(),
+    };
+  });
+
+  handle(IPC.PATHS, async () => ({
+    dataDir: userDataDir(),
+    modelsDir: modelsDir(),
+    dbPath: storage.dbPath,
+    casesDir: storage.casesDir,
+  }));
+
+  handle(IPC.CASE_CREATE, async (_e, input) => storage.createCase(input || {}));
+  handle(IPC.CASE_LIST, async () => storage.listCases());
+  handle(IPC.CASE_OPEN, async (_e, caseId) => {
+    const kase = requireCase(caseId);
+    return {
+      case: kase,
+      evidence: storage.listEvidence(caseId),
+      history: storage.listHistory(caseId),
+    };
+  });
+  handle(IPC.CASE_UPDATE, async (_e, caseId, patch) => storage.updateCase(caseId, patch || {}));
+  handle(IPC.CASE_DELETE, async (_e, caseId) => storage.deleteCase(caseId));
+
+  handle(IPC.EVIDENCE_IMPORT, async (_e, caseId, filePaths) => {
+    requireCase(caseId);
+    const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
+    const imported = [];
+    const failures = [];
+    for (const filePath of paths) {
+      try {
+        if (!fs.existsSync(filePath)) throw Object.assign(new Error('File not found.'), { code: 'FILE_NOT_FOUND' });
+        let meta = {};
+        try {
+          meta = await media.probe(filePath);
+        } catch (probeErr) {
+          // A file the decoder cannot read is still recorded, with a warning,
+          // so the operator sees exactly what was rejected.
+          meta = {};
+          failures.push({ path: filePath, error: toErrorPayload(probeErr) });
+        }
+        const ev = await storage.importEvidence(caseId, filePath, meta);
+        imported.push({ ...ev, probeWarning: meta.format ? null : 'Metadata could not be read by the decoder.' });
+      } catch (err) {
+        failures.push({ path: filePath, error: toErrorPayload(err) });
+      }
+    }
+    return { imported, failures };
+  });
+
+  handle(IPC.EVIDENCE_LIST, async (_e, caseId) => storage.listEvidence(caseId));
+  handle(IPC.EVIDENCE_DELETE, async (_e, evidenceId) => storage.deleteEvidence(evidenceId));
+  handle(IPC.EVIDENCE_REVEAL, async (_e, evidenceId) => {
+    const ev = await resolveEvidenceFile(evidenceId);
+    shell.showItemInFolder(ev.original_path);
+    return true;
+  });
+
+  handle(IPC.EVIDENCE_WAVEFORM, async (_e, evidenceId, buckets) => {
+    const ev = await resolveEvidenceFile(evidenceId);
+    const source = playbackPath(ev);
+    if (!fs.existsSync(source)) throw Object.assign(new Error('Audio file is missing.'), { code: 'FILE_NOT_FOUND' });
+    const target = Math.max(200, Math.min(8000, Number(buckets) || 1600));
+    return media.waveformPeaks(source, target);
+  });
+
+  handle(IPC.TRANSCRIPT_GET, async (_e, caseId, evidenceId) => {
+    const transcript = storage.getTranscript(caseId, evidenceId);
+    if (!transcript) return null;
+    return { transcript, segments: storage.getSegments(transcript.transcript_id) };
+  });
+
+  handle(IPC.TRANSCRIPT_SAVE, async (_e, caseId, evidenceId, payload) => {
+    requireCase(caseId);
+    return storage.saveTranscript(caseId, evidenceId, payload || {});
+  });
+
+  handle(IPC.HISTORY_LIST, async (_e, caseId) => storage.listHistory(caseId));
+
+  handle(IPC.MODEL_LIST, async () => modelManager.list());
+  handle(IPC.MODEL_INSTALL, async (_e, modelId) => {
+    const result = await modelManager.install(modelId, {
+      onProgress: (p) => send(IPC.TRANSCRIBE_PROGRESS, { kind: 'model-download', modelId, ...p }),
+    });
+    return result;
+  });
+  handle(IPC.MODEL_IMPORT_FILE, async (_e, modelId) => {
+    const model = getModel(modelId);
+    if (!model) throw Object.assign(new Error('Unknown model.'), { code: 'MODEL_UNKNOWN' });
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: `Select ${model.label} file`,
+      properties: ['openFile'],
+    });
+    if (picked.canceled || !picked.filePaths.length) return { canceled: true };
+    return modelManager.importFromFile(modelId, picked.filePaths[0]);
+  });
+
+  handle(IPC.DIALOG_OPEN_FILES, async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: 'Import recording',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Audio / Video', extensions: SUPPORTED_EXTENSIONS.map((e) => e.replace('.', '')) },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    return picked.canceled ? [] : picked.filePaths;
+  });
+
+  handle(IPC.DIALOG_OPEN_DIRECTORY, async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    return picked.canceled ? null : picked.filePaths[0];
+  });
+
+  handle(IPC.DIALOG_SAVE_FILE, async (_e, options) => {
+    const picked = await dialog.showSaveDialog(mainWindow, options || {});
+    return picked.canceled ? null : picked.filePath;
+  });
+
+  handle(IPC.EXPORT_RUN, async (_e, caseId, evidenceId, options) => {
+    const kase = requireCase(caseId);
+    const ev = await resolveEvidenceFile(evidenceId);
+    const transcript = storage.getTranscript(caseId, evidenceId);
+    if (!transcript) throw Object.assign(new Error('No transcript to export.'), { code: 'TRANSCRIPT_MISSING' });
+    const segments = storage.getSegments(transcript.transcript_id);
+    const formats = Array.isArray(options && options.formats) ? options.formats : ['json', 'txt', 'srt', 'html'];
+    const written = await runExport({
+      caseRecord: kase,
+      evidence: ev,
+      transcript,
+      segments,
+      language: transcript.language,
+      modelId: transcript.model_id,
+      engine: transcript.engine,
+      formats,
+      outputDir: options && options.outputDir ? options.outputDir : undefined,
+      baseName: options && options.baseName ? options.baseName : undefined,
+    });
+    storage.recordHistory(caseId, HISTORY_ACTIONS.EXPORT_CREATED, evidenceId, {
+      formats,
+      files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
+    });
+    return written;
+  });
+
+  handle(IPC.TRANSCRIBE_CANCEL, async (event) => {
+    const job = jobs.get(event.sender.id);
+    if (job) {
+      job.controller.abort();
+      return true;
+    }
+    return false;
+  });
+
+  handle(IPC.TRANSCRIBE_START, async (event, input) => {
+    const { caseId, evidenceId, modelId, language = 'tr', useGpu = true, useVad = true } = input || {};
+    const kase = requireCase(caseId);
+    const ev = await resolveEvidenceFile(evidenceId);
+    if (ev.case_id !== caseId) throw Object.assign(new Error('Evidence is not part of this case.'), { code: 'EVIDENCE_MISMATCH' });
+    if (jobs.has(event.sender.id)) throw Object.assign(new Error('A transcription is already running.'), { code: 'TRANSCRIPTION_BUSY' });
+
+    const asrId = modelId || DEFAULT_ASR_MODEL_ID;
+    const status = await modelManager.status(asrId);
+    if (!status.exists) throw Object.assign(new Error('Model not installed. Install model package to begin.'), { code: 'MODEL_NOT_INSTALLED' });
+    if (!status.verified) throw Object.assign(new Error('Installed model failed checksum verification.'), { code: 'MODEL_CHECKSUM_MISMATCH' });
+
+    const vadStatus = await modelManager.status(DEFAULT_VAD_MODEL_ID);
+    const controller = new AbortController();
+    jobs.set(event.sender.id, { controller });
+
+    const emit = (payload) => send(IPC.TRANSCRIBE_PROGRESS, payload);
+    try {
+      emit({ kind: 'stage', stage: 'preparing', percent: 2 });
+
+      const derivedDir = path.join(kase.case_dir, 'evidence', 'derived');
+      const derivedPath = path.join(derivedDir, `${ev.evidence_id}.asr16k.wav`);
+      await media.toAsrWav(ev.original_path, derivedPath, {
+        onProgress: () => emit({ kind: 'stage', stage: 'decoding' }),
+      });
+      storage.setDerivedPath(ev.evidence_id, derivedPath);
+      if (controller.signal.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'TRANSCRIPTION_CANCELLED' });
+
+      emit({ kind: 'stage', stage: 'loading-model', percent: 5 });
+      whisper.modelPath = modelManager.resolvePath(asrId);
+      whisper.vadModelPath = vadStatus.exists ? modelManager.resolvePath(DEFAULT_VAD_MODEL_ID) : null;
+
+      storage.recordHistory(caseId, HISTORY_ACTIONS.TRANSCRIPTION_STARTED, evidenceId, { modelId: asrId, language });
+
+      const result = await whisper.transcribe(derivedPath, {
+        language,
+        useGpu,
+        useVad,
+        signal: controller.signal,
+        onProgress: ({ percent, stage }) => emit({ kind: 'stage', stage, percent: 5 + Math.round(percent * 0.9) }),
+      });
+
+      if (controller.signal.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'TRANSCRIPTION_CANCELLED' });
+
+      const saved = storage.saveTranscript(caseId, evidenceId, {
+        language: result.language || language,
+        modelId: asrId,
+        engine: result.engine,
+        segments: result.segments,
+        source: 'asr',
+      });
+      emit({ kind: 'stage', stage: 'done', percent: 100 });
+      return {
+        transcript: saved.transcript,
+        segments: saved.segments,
+        meta: result.raw,
+      };
+    } catch (err) {
+      const code = err && err.code ? err.code : 'ASR_FAILED';
+      storage.recordHistory(caseId, code === 'TRANSCRIPTION_CANCELLED' ? HISTORY_ACTIONS.TRANSCRIPTION_CANCELLED : HISTORY_ACTIONS.TRANSCRIPTION_FAILED, evidenceId, { code, message: err.message });
+      throw err;
+    } finally {
+      jobs.delete(event.sender.id);
+    }
+  });
+}
+
+async function bootstrap() {
+  await app.whenReady();
+
+  const dataDir = userDataDir();
+  logger = new Logger(dataDir);
+  logger.info('application starting', { version: app.getVersion(), platform: process.platform, dataDir });
+
+  storage = new Storage(dataDir);
+  media = new MediaService();
+  modelManager = new ModelManager(modelsDir());
+  whisper = new WhisperAdapter({
+    binaryPath: resolveBinary('whisper-cli'),
+    modelPath: modelManager.resolvePath(DEFAULT_ASR_MODEL_ID),
+    vadModelPath: modelManager.resolvePath(DEFAULT_VAD_MODEL_ID),
+  });
+
+  registerMediaProtocol();
+  registerIpc();
+  createWindow();
+
+  if (process.argv.includes('--smoke-test')) {
+    await runSmokeTest();
+    return;
+  }
+
+  if (process.argv.includes('--acceptance-test')) {
+    await runAcceptanceTest();
+    return;
+  }
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}
+
+/**
+ * Headless self-test used by the release verification script. It boots the real
+ * application (database, media scheme, IPC, renderer) and asserts the pieces
+ * the acceptance test depends on are present. Exits non-zero on failure.
+ */
+async function runSmokeTest() {
+  const report = { ok: false, steps: [] };
+  const step = (name, ok, detail) => report.steps.push({ name, ok, detail });
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('window did not finish loading')), 30000);
+      mainWindow.webContents.once('did-finish-load', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      mainWindow.webContents.once('did-fail-load', (_e, code, desc) => {
+        clearTimeout(timer);
+        reject(new Error(`did-fail-load ${code} ${desc}`));
+      });
+    });
+    step('window loaded', true);
+
+    const apiPresent = await mainWindow.webContents.executeJavaScript(
+      'Boolean(window.ft && window.ft.app && window.ft.transcribe && window.ft.exports)'
+    );
+    step('preload API exposed', apiPresent === true, String(apiPresent));
+
+    const info = await mainWindow.webContents.executeJavaScript('window.ft.app.info()');
+    step('app.info resolves', info && info.ok === true);
+    step('database open', Boolean(info && info.data && info.data.storage && info.data.storage.schemaVersion >= 1));
+
+    const mediaStatus = info.data.media || {};
+    step('ffmpeg available', mediaStatus.ffmpeg === true);
+    step('ffprobe available', mediaStatus.ffprobe === true);
+
+    const created = await storage.createCase({ title: 'Smoke test case' });
+    step('case create', Boolean(created && created.case_id));
+    step('case persisted', Boolean(storage.getCase(created.case_id)));
+    storage.deleteCase(created.case_id);
+
+    const models = await modelManager.list();
+    step('model registry readable', Array.isArray(models) && models.length >= 3);
+
+    report.ok = report.steps.every((s) => s.ok);
+  } catch (err) {
+    report.error = err.message;
+  }
+
+  // eslint-disable-next-line no-console
+  process.stdout.write(`SMOKE_RESULT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  app.exit(report.ok ? 0 : 1);
+}
+
+/**
+ * End-to-end acceptance test (section 72) driven through the real renderer and
+ * IPC surface of the packaged application. Verifies the full user workflow:
+ * create case → import → metadata + SHA-256 → transcribe → save → reopen →
+ * export, plus that the audio stream the player uses is reachable.
+ */
+async function runAcceptanceTest() {
+  const report = { ok: false, steps: [] };
+  const step = (name, ok, detail) => {
+    report.steps.push({ name, ok, detail });
+    if (process.env.FT_VERBOSE) process.stderr.write(`[acceptance] ${ok ? 'ok' : 'FAIL'} ${name}${detail ? ` :: ${detail}` : ''}\n`);
+  };
+  const argOf = (flag, fallback) => {
+    const i = process.argv.indexOf(flag);
+    return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+  };
+  const audio = argOf('--acceptance-audio', path.join(__dirname, '..', '..', 'tests', 'fixtures', 'tr-known-events.wav'));
+  const modelId = argOf('--acceptance-model', DEFAULT_ASR_MODEL_ID);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('window did not finish loading')), 30000);
+      mainWindow.webContents.once('did-finish-load', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      mainWindow.webContents.once('did-fail-load', (_e, code, desc) => {
+        clearTimeout(timer);
+        reject(new Error(`did-fail-load ${code} ${desc}`));
+      });
+    });
+    step('fresh launch', true);
+
+    const js = (code) => mainWindow.webContents.executeJavaScript(code, true);
+
+    const created = await js(`window.ft.cases.create({ title: 'Acceptance run', notes: 'auto' })`);
+    step('create case', created.ok === true);
+    const caseId = created.data.case_id;
+
+    const imported = await js(`window.ft.evidence.importFiles(${JSON.stringify(caseId)}, [${JSON.stringify(audio)}])`);
+    step('import recording', imported.ok === true && imported.data.imported.length === 1);
+    const ev = imported.data.imported[0];
+    step('metadata visible', Boolean(ev && ev.duration_seconds > 0 && ev.sample_rate));
+    step('sha256 visible', Boolean(ev && /^[0-9a-f]{64}$/.test(ev.sha256)));
+
+    // The player streams through the ft-media scheme; prove it resolves.
+    const mediaOk = await js(`(async () => {
+      const url = window.ft.evidence.playbackUrl(${JSON.stringify(ev.evidence_id)});
+      const res = await fetch(url, { headers: { Range: 'bytes=0-1023' } });
+      return { status: res.status, type: res.headers.get('content-type'), len: (await res.arrayBuffer()).byteLength };
+    })()`);
+    step('audio stream reachable', mediaOk.status === 206 || mediaOk.status === 200, JSON.stringify(mediaOk));
+
+    const model = (await modelManager.list()).find((m) => m.id === modelId);
+    if (!model || !model.installed || !model.verified) {
+      step('model installed', false, `model ${modelId} not installed/verified`);
+      throw new Error('acceptance model not installed');
+    }
+    step('model installed', true);
+
+    const transcribed = await js(
+      `window.ft.transcribe.start({ caseId: ${JSON.stringify(caseId)}, evidenceId: ${JSON.stringify(ev.evidence_id)}, modelId: ${JSON.stringify(modelId)}, language: 'tr', useGpu: false, useVad: true })`
+    );
+    step('transcribe', transcribed.ok === true);
+    const segments = transcribed.data.segments;
+    step('turkish transcript produced', segments.length >= 1 && segments.some((s) => s.text && s.text.trim().length > 0));
+    step('segments are automatic', segments.every((s) => s.status === 'AUTOMATIC'));
+    step('segments carry timestamps', segments.every((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start));
+
+    // Edit the first segment and confirm the machine/expert distinction is kept
+    // for every segment that was not touched.
+    const edited = JSON.parse(JSON.stringify(segments));
+    const untouchedAutomatic = edited.filter((s, i) => i > 0 && s.status === 'AUTOMATIC').map((s) => s.segment_id);
+    edited[0].text = 'Düzenlenmiş metin';
+    edited[0].status = 'EDITED';
+    const saved = await js(
+      `window.ft.transcript.save(${JSON.stringify(caseId)}, ${JSON.stringify(ev.evidence_id)}, { language: 'tr', modelId: ${JSON.stringify(modelId)}, engine: 'whisper.cpp', segments: ${JSON.stringify(edited)}, source: 'review' })`
+    );
+    step('edit + save', saved.ok === true && saved.data.segments[0].status === 'EDITED');
+
+    // Reopen (new storage instance over the same data dir) and confirm persistence.
+    const reopenStorage = new Storage(userDataDir());
+    const reloaded = reopenStorage.getTranscript(caseId, ev.evidence_id);
+    const reloadedSegments = reopenStorage.getSegments(reloaded.transcript_id);
+    step('reopen: edit persists', reloadedSegments[0].text === 'Düzenlenmiş metin' && reloadedSegments[0].status === 'EDITED');
+    const stillAutomatic = reloadedSegments.filter((s) => untouchedAutomatic.includes(s.segment_id));
+    step(
+      'reopen: automatic preserved',
+      stillAutomatic.length === untouchedAutomatic.length && stillAutomatic.every((s) => s.status === 'AUTOMATIC')
+    );
+    reopenStorage.close();
+
+    const exported = await js(
+      `window.ft.exports.run(${JSON.stringify(caseId)}, ${JSON.stringify(ev.evidence_id)}, { formats: ['json','txt','srt','html'] })`
+    );
+    step('export', exported.ok === true && exported.data.length === 4);
+    for (const f of exported.data) {
+      step(`export ${f.format} written`, fs.existsSync(f.path) && f.bytes > 0);
+    }
+    const jsonPath = exported.data.find((f) => f.format === 'json').path;
+    const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    step('export json matches stored transcript', json.segments.length === reloadedSegments.length);
+
+    report.ok = report.steps.every((s) => s.ok);
+  } catch (err) {
+    report.error = err.message;
+  }
+
+  // eslint-disable-next-line no-console
+  process.stdout.write(`ACCEPTANCE_RESULT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  app.exit(report.ok ? 0 : 1);
+}
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  for (const job of jobs.values()) {
+    try {
+      job.controller.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+  if (storage) storage.close();
+});
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+  bootstrap().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Fatal startup error', err);
+    app.quit();
+  });
+}
+
+module.exports = { MEDIA_SCHEME };
