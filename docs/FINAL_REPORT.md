@@ -2,7 +2,7 @@
 
 STATUS: **COMPLETE WITH KNOWN LIMITATIONS**
 
-VERSION: 0.1.0
+VERSION: 0.1.1
 
 COMMIT: see the repository's initial release commit (this document ships with it)
 
@@ -52,12 +52,22 @@ Built by `scripts/build-model-package.js`: default ASR + VAD models, a
 checksummed `manifest.json`, and a README. Model files are verified against
 `docs/model-notes.md` before being included.
 
-RELEASE DISTRIBUTABILITY: the artefacts above were built and checksum-verified in
-this environment. The published **v0.1.0 GitHub Release is not distributable**:
-the Windows release workflow did not complete, so the release currently contains
-only GitHub's automatic source archives and **no** `.exe`, portable `.zip`, model
-package or `SHA256SUMS.txt`. Do not treat v0.1.0 as a usable download until that
-workflow succeeds and attaches those assets.
+RELEASE DISTRIBUTABILITY: **v0.1.1 is the first distributable release.**
+Published at https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.1
+with the Windows installer, portable zip, offline model package, `latest.yml`
+and `SHA256SUMS.txt`. All three distributables were re-downloaded and their
+SHA-256 values verified against `SHA256SUMS.txt`; the `latest.yml` sha512 matches
+the published installer exactly.
+
+The older **v0.1.0 GitHub Release is not distributable** and was deliberately left
+untouched: its Windows workflow failed, so it contains only GitHub's automatic
+source archives and no binaries. Use v0.1.1.
+
+GPU RUNTIME IN THIS RELEASE: **CPU runtime only.** The hosted `windows-latest`
+runner has no CUDA toolkit, so the optional CUDA runtime was not built for
+v0.1.1. The application detects this, reports CPU mode, and keeps the CPU
+fallback; the GPU runtime stays unverified until a CUDA-enabled build is made on
+a runner or machine that has the toolkit.
 
 GITHUB PAGES: `site/` (static documentation + download portal). No audio
 processing on the site; the download button points at the latest release asset.
