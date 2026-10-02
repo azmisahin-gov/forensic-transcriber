@@ -3,9 +3,10 @@
 All notable changes to this project are documented here.
 Format based on Keep a Changelog; the project follows Semantic Versioning.
 
-## [Unreleased] — release lifecycle
+## [Unreleased]
 
 ### Added
+
 
 - **Controlled release lifecycle.** A **Release (version)** workflow
   (`workflow_dispatch` with `patch`/`minor`/`major`) calculates the next SemVer,
@@ -30,6 +31,7 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+
 - `release.yml` is now a reusable build/publish workflow (`workflow_call` plus
   manual dispatch) that re-verifies tag/version consistency, refuses an
   incomplete artefact set, refuses to publish Linux artefacts as Windows assets,
@@ -39,6 +41,7 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ### Security
 
+
 - The update source is pinned to `azmisahin-gov/forensic-transcriber` over HTTPS
   on the `latest` channel; no other channel is configurable at runtime.
 - The model package is explicitly **not** an update payload, and publishing fails
@@ -47,9 +50,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   integrity check is the sha512 in the release metadata, not a publisher
   signature.
 
-## [Unreleased] — release hardening
-
 ### Fixed
+
 
 - **GPU support was not actually present.** The packaged `whisper-cli.exe` was a
   CPU-only build (`backends = 1`, `device 0: CPU (type: 0)`, `no GPU found`),
@@ -75,7 +77,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   combined `SHA256SUMS.txt` from the downloaded artefacts, and fails before
   publishing if an expected asset is missing.
 
-### Added
+### Added (release hardening)
+
 
 - **CPU + optional CUDA runtimes.** The CPU runtime always ships; a CUDA runtime
   is staged into `bin/gpu/` with the redistributable NVIDIA DLLs (CUDA EULA
@@ -96,7 +99,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   clear statement that the installer ships without a model.
 - Unit tests for the runtime probe parser, the runtime selector, and `version()`.
 
-### Changed
+### Changed (release hardening)
+
 
 - Documentation now separates **automated validation**, **target-machine
   validation** and **human-corpus validation**; accuracy figures are labelled a
