@@ -4,6 +4,79 @@ CURRENT_PHASE: P11 — release lifecycle
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
 LAST_UPDATED: 2026-10-02
 
+## First distributable release published: v0.1.1
+
+The controlled release lifecycle ran end to end and published a real,
+distributable release.
+
+| | |
+| --- | --- |
+| Version | **0.1.1** (patch from 0.1.0) |
+| Tag | `v0.1.1` → `af6b1a7` ("Release 0.1.1") |
+| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.1 |
+| Assets | `ForensicTranscriber-Setup-x64.exe` (192 564 370 B), `ForensicTranscriber-Portable-x64.zip` (260 840 978 B), `ForensicTranscriber-ModelPack-0.1.1.zip` (534 060 311 B), `latest.yml` (363 B), `SHA256SUMS.txt` (309 B) |
+| Workflow run | `37078216359` — version, verify-version, build-windows, model-package, publish all **success** |
+
+Verified after publication:
+- `SHA256SUMS.txt` covers all three distributables and `sha256sum -c` passes for
+  every downloaded asset.
+- `latest.yml` reports `version: 0.1.1`, `path:
+  ForensicTranscriber-Setup-x64.exe`, and its **sha512 exactly matches** the
+  published installer bytes (checked with `node:crypto`).
+- Tag, `package.json`, `package-lock.json` (both fields) and `latest.yml` all
+  agree on `0.1.1`.
+- The packaged application binary is a genuine **x64 PE**; the portable zip
+  contains `resources/vendor/bin/{whisper-cli.exe,ffmpeg.exe,ffprobe.exe}` and
+  **no Linux artifacts**.
+- The model package contains the pinned ASR + VAD models with their expected
+  checksums.
+- `v0.1.0` tag and release were **not** modified.
+
+## Fixes applied on top of the merged lifecycle
+
+- Consolidated `CHANGELOG.md` into a single `[Unreleased]` section (it had two,
+  which would have produced a malformed release section).
+- Declared `js-yaml` as an explicit dependency (it was required directly by
+  `scripts/verify-updater-metadata.js` but only present transitively).
+- The Windows CUDA build step no longer uses `continue-on-error`, which showed a
+  **green tick over a build that did not happen**. It now skips cleanly when no
+  CUDA toolkit is present, reports the GPU runtime state in the job summary, and
+  still builds the CUDA runtime when a toolkit exists.
+
+## Verified in this environment
+
+- Unit tests: 99/99 pass.
+- Integration tests: pipeline 4/4, red-team 15/15, update-data-safety 4/4.
+- Lint: 0 problems (44 files).
+- Security check: 0 critical findings.
+- Packaged-app smoke test: 14/14 steps; acceptance test: 20/20 steps.
+- Release gate: 12/12 pass.
+
+## Not verified (known limitations)
+
+- **No live auto-update run.** A real update requires a *second* published
+  release and an installed Windows build. The configuration, state machine,
+  metadata and safety properties are verified; the live update is not.
+- **GPU runtime is not in this release.** The hosted `windows-latest` runner has
+  no CUDA toolkit, so `v0.1.1` ships the **CPU runtime only**. The application
+  reports CPU mode and the GPU runtime remains unverified.
+- **Not verified on target NVIDIA hardware** (no RTX 3060 available).
+- **The Windows installer was not launched on real Windows hardware**; the
+  Windows binaries were validated under Wine.
+- **No code signing.** The updater's integrity check is the sha512 in
+  `latest.yml`, not a publisher signature.
+- Accuracy is a **synthetic benchmark**, not a human corpus.
+
+## Next exact action
+
+Install `ForensicTranscriber-Setup-x64.exe` (v0.1.1) on a real Windows x64
+machine, confirm transcription and the **Check engine** report, then publish a
+second release to exercise the live auto-update path.
+
+VERIFICATION_STATUS: release published and its artifacts independently verified;
+live auto-update and target-machine validation outstanding and marked unverified.
+
+
 ## What this phase added
 
 - **Semantic versioning** (`src/shared/versioning.js`): parse, compare, bump,

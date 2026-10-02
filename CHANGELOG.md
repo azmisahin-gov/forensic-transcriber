@@ -5,7 +5,22 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Windows CUDA build step reported a false success.** It used
+  `continue-on-error: true`, so when the runner had no CUDA toolkit the step
+  still showed a green tick over a build that never happened. It now skips
+  cleanly, writes the GPU runtime state to the job summary, and still builds the
+  CUDA runtime when a toolkit is present.
+- **`CHANGELOG.md` had two `## [Unreleased]` sections**, which would have
+  produced a malformed release section; consolidated into one.
+- **`js-yaml` was an undeclared direct dependency** of
+  `scripts/verify-updater-metadata.js`; now declared explicitly.
+
 ## [0.1.1] - 2026-10-02
+
+First distributable release: Windows x64 installer, portable zip, offline model
+package, `latest.yml` and `SHA256SUMS.txt`.
 
 ### Added
 
