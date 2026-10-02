@@ -42,7 +42,11 @@ does **not** bundle a speech model — open the application and use **Models →
 - **Record provenance**: file name, size, container, codec, duration, sample rate,
   channels, bit depth and a **SHA-256** of the imported copy.
 - **Transcribe locally** with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
-  with optional voice-activity detection and GPU acceleration (CUDA) plus a CPU fallback.
+  with optional voice-activity detection. Two runtimes are supported: a CPU runtime that
+  always ships, and an optional CUDA runtime. The application picks the CUDA runtime only
+  when it actually detects a usable GPU, and otherwise runs on the CPU. Press **Check
+  engine** in the app to see whether the installed runtime is CUDA-capable and which
+  device a run used.
 - **Review against the audio**: click any transcript line to play exactly that region of
   the original recording. A waveform shows position, selection and speech regions.
 - **Edit**: change text, split, merge, relabel speakers, and set each segment's status.
@@ -145,6 +149,32 @@ chain-of-custody requirement.
 No telemetry. No analytics. No login. No account. No audio upload. Case data stays on
 the local machine. See [docs/security.md](docs/security.md).
 
+## Validation status
+
+Validation is reported in three separate tiers. Do not read one tier as another.
+
+| Tier | What it means | Current state |
+| --- | --- | --- |
+| Automated validation | Tests, lint and security checks run in the build environment | All green (see counts below) |
+| Target-machine validation | Running the built installer/portable on real Windows x64 with an NVIDIA RTX 3060 | Not yet performed — see limitations |
+| Real-world human corpus validation | Accuracy measured against human-verified case recordings | Not performed — WER/CER is synthetic only |
+
+### Automated validation (actual results)
+
+| Gate | Result |
+| --- | --- |
+| Lint | 0 problems (35 files) |
+| Unit tests | 41/41 pass |
+| Integration tests — pipeline + timestamp contract | 4/4 pass |
+| Integration tests — red-team / hostile input | 15/15 pass |
+| Security check | 0 critical findings |
+| Packaged smoke test | 11/11 steps |
+| Packaged acceptance test | 20/20 steps |
+
+Accuracy figures in this repository come from a **synthetic benchmark** (espeak-ng TTS
+audio), not a human corpus. They are labelled as such and must not be read as
+real-world validation.
+
 ## Final implementation report
 
 The release report (status, versions, engine/model, build and test results, benchmarks,
@@ -156,19 +186,19 @@ security and license review, known limitations) is in
 | --- | --- |
 | Status | COMPLETE WITH KNOWN LIMITATIONS |
 | Version | 0.1.0 |
-| ASR engine | whisper.cpp v1.9.4 |
+| ASR engine | whisper.cpp v1.9.4 (CPU runtime; optional CUDA runtime) |
 | Model | Whisper large-v3-turbo (q5_0), 547 MiB |
 | Desktop stack | Electron 44.5.1 + electron-builder 26.15.3 |
 | Database | SQLite (`node:sqlite`), local only |
 | Decoder | FFmpeg (pinned LGPL build on Windows) |
-| Tests | 28 unit · 3 integration · 15 red-team · 9 smoke · 20 acceptance |
+| GPU | CUDA runtime path implemented and probe-verified; not verified on target NVIDIA hardware |
 | Security | 0 critical findings; no telemetry, no hidden network calls |
-| License | AGPL-3.0-only (code); MIT/LGPL third parties |
+| License | AGPL-3.0-only (code); MIT/LGPL/NVIDIA third parties |
 
 Known limitations: the Windows installer was not launched on real Windows hardware in the
-build environment (Windows binaries were validated under Wine); no GPU benchmark was
-possible (no NVIDIA device); WER/CER was measured on synthetic audio; no PDF export; no
-automatic diarization; the executable is not code-signed.
+build environment (Windows binaries were validated under Wine); GPU transcription was not
+verified on an RTX 3060 (no NVIDIA device available); accuracy was measured on synthetic
+audio only; no PDF export; no automatic diarization; the executable is not code-signed.
 
 ## License
 

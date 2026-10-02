@@ -3,6 +3,49 @@
 All notable changes to this project are documented here.
 Format based on Keep a Changelog; the project follows Semantic Versioning.
 
+## [Unreleased] — release hardening
+
+### Fixed
+
+- **GPU support was not actually present.** The packaged `whisper-cli.exe` was a
+  CPU-only build (`backends = 1`, `device 0: CPU (type: 0)`, `no GPU found`),
+  while the documentation implied GPU acceleration. A real two-runtime strategy
+  now exists and the documentation states exactly what is verified.
+- **`WhisperAdapter.version()` always returned `null`.** The output buffer was
+  scoped inside the promise executor and was undefined outside it. A regression
+  test covers this.
+- **GitHub Pages workflow failed.** The repository Pages site was not enabled;
+  `actions/configure-pages` now runs with `enablement: true`, and the one-time
+  manual setting is documented in `docs/RELEASE_CHECKLIST.md`.
+
+### Added
+
+- **CPU + optional CUDA runtimes.** The CPU runtime always ships; a CUDA runtime
+  is staged into `bin/gpu/` with the redistributable NVIDIA DLLs (CUDA EULA
+  Attachment A) when the CI CUDA build succeeds.
+- **Runtime capability probe.** `WhisperAdapter.probeRuntime()` reads the
+  engine's own device/backend report to distinguish a CUDA-capable binary from a
+  CPU-only one and to report the device actually used.
+- **Runtime selection with explicit reasons.** `src/main/services/runtime-selector.js`
+  picks CPU or GPU by evidence (`GPU_AVAILABLE`, `GPU_RUNTIME_NOT_BUNDLED`,
+  `GPU_BINARY_NOT_CUDA`, `NO_GPU_DEVICE`, `OPERATOR_SELECTED_CPU`) and never
+  infers capability from the host having a GPU.
+- **Engine reporting in the UI and CLI.** A **Check engine** button, engine
+  status line, per-run GPU/CPU toast, and an `--engine-report` self-test used by
+  the release gate.
+- **Windows CUDA build path.** `scripts/build-whisper-cuda-windows.cmd` and the
+  release workflow build the CUDA runtime on `windows-latest`.
+- Site download links for the portable zip and the offline model package, and a
+  clear statement that the installer ships without a model.
+- Unit tests for the runtime probe parser, the runtime selector, and `version()`.
+
+### Changed
+
+- Documentation now separates **automated validation**, **target-machine
+  validation** and **human-corpus validation**; accuracy figures are labelled a
+  **synthetic benchmark**, not real-world validation.
+- Test counts corrected across the docs.
+
 ## [0.1.0] — 2026-10-02
 
 First working release. Local-first 56.12 transcription workbench for Windows x64.

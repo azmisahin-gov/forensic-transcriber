@@ -11,7 +11,9 @@ code license.
 | --- | --- | --- | --- | --- | --- |
 | Electron | 44.5.1 | MIT | https://github.com/electron/electron | Desktop runtime (Chromium + Node) | MIT notice retained; Chromium/Node licenses in `LICENSES.chromium.html` shipped beside the app |
 | FFmpeg (`ffmpeg.exe`, `ffprobe.exe`) | n8.1.3 (build `ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-8.1`) | LGPL-3.0-or-later (LGPL build) | https://github.com/BtbN/FFmpeg-Builds (source: https://ffmpeg.org) | Decode any input to a 16 kHz mono WAV; probe metadata | Executed as a separate process, not linked. LGPL notice + source offer required. Build chosen specifically to avoid GPL-only components. |
-| whisper.cpp (`whisper-cli.exe`) | v1.9.4 (2026-09-11) | MIT | https://github.com/ggml-org/whisper.cpp | Local ASR engine | MIT notice retained |
+| whisper.cpp (`whisper-cli.exe`, CPU runtime) | v1.9.4 (2026-09-11) | MIT | https://github.com/ggml-org/whisper.cpp | Local ASR engine (universal CPU fallback) | MIT notice retained |
+| whisper.cpp (`gpu/whisper-cli.exe`, CUDA runtime, optional) | v1.9.4 (2026-09-11) | MIT | https://github.com/ggml-org/whisper.cpp | Local ASR engine with GPU acceleration | MIT notice retained. Built by `scripts/build-whisper-cuda-windows.cmd`; staged only when the CUDA build succeeds |
+| NVIDIA CUDA runtime DLLs (`gpu/cudart64_*.dll`, `gpu/cublas64_*.dll`, `gpu/cublasLt64_*.dll`) | from the CUDA Toolkit 12.x used at build time | NVIDIA CUDA Toolkit EULA, Attachment A (redistributable) | https://docs.nvidia.com/cuda/eula/ | CUDA runtime, BLAS and BLAS-Lt libraries required by the CUDA whisper runtime | Redistributable per EULA Attachment A. Not committed to this repository; copied from the CUDA Toolkit by the build script |
 | Silero VAD ggml model | v5.1.2 | MIT | https://huggingface.co/ggml-org/whisper-vad | Voice activity detection | Not bundled in the standard installer; included in the offline model package |
 
 ## Models (downloaded or imported; not in the standard installer)
@@ -55,3 +57,8 @@ data, and are redistributable with this project.
   the corresponding source available. Because FFmpeg is invoked as a separate
   process and is not statically or dynamically linked into the application, the
   application is not itself derived from FFmpeg.
+- **NVIDIA CUDA Toolkit EULA** (optional CUDA runtime DLLs): the redistributable
+  files in Attachment A (`cudart64_*`, `cublas64_*`, `cublasLt64_*`) may be
+  shipped with the application. They are distributed only inside the optional
+  CUDA runtime directory, are never committed to this repository, and carry
+  NVIDIA's license, not the project's.

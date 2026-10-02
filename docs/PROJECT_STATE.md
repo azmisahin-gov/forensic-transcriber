@@ -1,60 +1,69 @@
 # Project state
 
-CURRENT_PHASE: P10
+CURRENT_PHASE: P10 — release hardening
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
 LAST_UPDATED: 2026-10-02
 
-## Phase status
+## What changed in the release-hardening pass
 
-| Phase | Scope | Status |
-| --- | --- | --- |
-| P0 | Research + decisions | COMPLETE |
-| P1 | Foundation (shell, SQLite, logging, tests) | COMPLETE |
-| P2 | Evidence ingestion | COMPLETE |
-| P3 | Local transcription | COMPLETE |
-| P4 | Review workspace | COMPLETE |
-| P5 | Export | COMPLETE |
-| P6 | Packaging | COMPLETE |
-| P7 | Website (GitHub Pages) | COMPLETE |
-| P8 | Red team | COMPLETE |
-| P9 | Real-world validation | COMPLETE |
-| P10 | Release verification + final report | COMPLETE WITH KNOWN LIMITATIONS |
+- **GPU audit.** The first release shipped a CPU-only `whisper-cli.exe` while the
+  docs implied GPU support. Confirmed by running the packaged binary:
+  `devices = 1`, `backends = 1`, `device 0: CPU (type: 0)`, `no GPU found`.
+- **Two-runtime strategy.** CPU runtime (always shipped) plus an optional CUDA
+  runtime in `bin/gpu/`. Selection is by the engine's own device/backend report
+  (`src/main/services/runtime-selector.js`), never by the host having a GPU.
+- **Verification mechanism.** `WhisperAdapter.probeRuntime()`, the
+  `app:engine-probe` IPC channel, the **Check engine** button and the
+  `--engine-report` self-test all report CUDA-capable vs CPU-only and which
+  device a run used.
+- **Windows CUDA build path.** `scripts/build-whisper-cuda-windows.cmd` and the
+  release workflow build the CUDA runtime on the `windows-latest` runner and
+  stage the redistributable NVIDIA DLLs (EULA Attachment A). Staged only when
+  the build succeeds.
+- **Fixed a real bug.** `WhisperAdapter.version()` always returned `null`
+  because the output buffer was scoped inside the promise executor.
+- **Pages workflow.** Root cause of the failure: the repository Pages site was
+  not enabled. `actions/configure-pages` now runs with `enablement: true`, and
+  the one-time manual setting is documented.
+- **Site download links.** Point at the real asset names through
+  `releases/latest/download`; a portable and a model-package link were added.
+- **Docs consistency.** Corrected test counts (41 unit, 4 pipeline, 15 red-team),
+  separated automated / target-machine / human-corpus validation tiers, and
+  replaced the "real-world validation" label with "synthetic benchmark".
 
 ## Verified in this environment
 
-- Unit tests: 28/28 pass (`node --test tests/unit/*.test.js`).
-- Integration tests: 4/4 pass, including the offset timestamp contract
-  (`node --test tests/integration/*.test.js`).
-- Red-team tests: 15/15 pass (`node --test tests/integration/redteam.test.js`).
-- Lint: 32 files checked, 0 problems (`node scripts/lint.js`).
-- Security check: 0 critical findings (`node scripts/security-check.js`).
-- Packaged-app smoke test: 9/9 steps pass.
-- Packaged-app acceptance test: 20/20 steps pass (create case → import →
-  metadata + SHA-256 → audio stream → transcribe → edit → save → reopen →
-  export json/txt/srt/html).
-- Linux `dir` build via electron-builder: produced and booted successfully.
-- Windows x64 native runtime: whisper.cpp v1.9.4 cross-built fully static
-  (only ADVAPI32/KERNEL32/msvcrt); functional transcription verified under Wine.
-- Model checksums: computed digests match the upstream published SHA-256 values.
+- Unit tests: 41/41 pass (`node --test tests/unit/*.test.js`).
+- Integration tests: 4/4 pipeline (incl. the offset timestamp contract) and
+  15/15 red-team pass.
+- Lint: 0 problems.
+- Security check: 0 critical findings.
+- Packaged-app smoke test: 11/11 steps.
+- Packaged-app acceptance test: 20/20 steps.
+- Engine report: CPU runtime confirmed; GPU runtime correctly reported as not
+  bundled in this build; selection reason `GPU_RUNTIME_NOT_BUNDLED`; run mode CPU.
+- Windows build: NSIS installer, portable zip and offline model package build
+  from pinned, checksum-verified sources.
 
 ## Not verified in this environment (known limitations)
 
-- The Windows NSIS installer and portable zip are produced by `npm run build:win`
-  but were not launched on real Windows hardware here (the environment is Linux).
-  The Windows binaries were validated under Wine instead.
-- The offline model package (`ForensicTranscriber-ModelPack-*.zip`) was not built
-  in this environment because the release output directory was already populated
-  by the installer build; run `node scripts/build-model-package.js` to produce it.
-- GPU (CUDA) benchmarking was not possible (no NVIDIA GPU in the build
-  environment). Benchmarks are CPU-only.
-- WER/CER is measured against synthetic TTS audio, not a human reference corpus.
-- PDF export is not implemented (see `docs/ROADMAP.md`).
+- **Not verified on target NVIDIA hardware.** There is no NVIDIA GPU and no CUDA
+  toolkit in the build environment, so the CUDA runtime could not be compiled or
+  exercised here. The CUDA build runs on the `windows-latest` CI runner. The
+  application reports the real runtime mode on the user's machine, so GPU
+  behaviour is verifiable there but is **unverified here**.
+- The Windows NSIS installer and portable zip were built but not launched on real
+  Windows hardware (the environment is Linux); Windows binaries were validated
+  under Wine.
+- Accuracy is a **synthetic benchmark** (espeak-ng TTS audio), not a human corpus.
+- No PDF export; no automatic diarization.
 
-## Next exact action (for a maintainer on real Windows hardware)
+## Next exact action
 
-Run `npm run build:win` on Windows, install the NSIS artefact, then execute the
-acceptance scenario in `docs/RELEASE_CHECKLIST.md` including GPU transcription,
-and update `docs/VERIFICATION.md` with the observed results.
+Run `npm run build:win` on Windows (or let the release workflow run), install the
+artefact, then execute the target-machine acceptance scenario in
+`docs/RELEASE_CHECKLIST.md` — including `--engine-report` on the RTX 3060 — and
+record the observed GPU mode in `docs/VERIFICATION.md`.
 
-VERIFICATION_STATUS: partial — all automated and packaged-app checks pass; real
-Windows GPU installation remains to be confirmed on target hardware.
+VERIFICATION_STATUS: automated and packaged-app validation complete; target-machine
+GPU validation outstanding and explicitly marked unverified.

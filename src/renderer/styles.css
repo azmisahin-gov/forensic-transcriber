@@ -112,6 +112,10 @@ html, body {
 
 .empty-state { padding: 48px 40px; max-width: 760px; }
 .empty-state h1 { margin: 0 0 6px; font-size: 26px; }
+.first-run { margin-top: 22px; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 10px; padding: 16px 18px; }
+.first-run h2 { font-size: 15px; margin: 0 0 8px; }
+.first-run p { color: var(--text-dim); margin: 0 0 12px; }
+.first-run-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .lede { color: var(--text-dim); margin-top: 0; }
 .flow { list-style: none; counter-reset: step; padding: 0; margin: 22px 0; display: grid; gap: 8px; }
 .flow li { counter-increment: step; display: flex; align-items: center; gap: 12px; color: var(--text-dim); }
@@ -172,6 +176,8 @@ textarea.input { resize: vertical; }
 .progress-track { flex: 1; height: 8px; border-radius: 999px; background: var(--bg-3); overflow: hidden; border: 1px solid var(--border); }
 .progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .2s; }
 .error { color: #ffb4b4; background: #2a1616; border: 1px solid #5c2c2c; border-radius: 8px; padding: 9px 11px; margin-top: 10px; font-size: 12.5px; }
+.engine-status { margin: 8px 0 0; }
+.engine-status.ok { color: #7ce0ab; }
 
 .player-panel { margin-top: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
 .waveform { width: 100%; display: block; border-radius: 8px; cursor: pointer; }

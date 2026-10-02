@@ -47,21 +47,43 @@ without a real command or observation behind it.
 
 ## 5. GPU
 
-- [ ] On an NVIDIA machine, confirm transcription uses the GPU.
-- [ ] Disable GPU (or remove the driver) and confirm the CPU fallback works.
+- [ ] `--engine-report` on the target machine reports the GPU runtime as
+      `gpuRuntimeBundled: true` and, on an RTX 3060, `cudaCapable: true`,
+      `gpuDeviceFound: true` and `selectedMode: "gpu"`.
+- [ ] In the app, **Check engine** shows "CUDA runtime bundled, GPU detected".
+- [ ] Run a transcription and confirm the toast and engine status say **GPU**.
+- [ ] Disable the GPU in the app (uncheck "Use GPU if available") and confirm the
+      run reports **CPU** and still completes.
+- [ ] If the CUDA runtime is not bundled in this release, record that explicitly
+      as `Not verified on target NVIDIA hardware` — do not claim GPU support.
 
 ## 6. Documentation test
 
 - [ ] Follow `README.md` developer steps on a clean checkout; nothing is missing.
 - [ ] Follow the end-user quick start; no step assumes terminal use.
 
-## 7. Publication
+## 7. GitHub Pages (one-time repository setting)
+
+The Pages workflow uses `actions/configure-pages` with `enablement: true`, which
+enables a Pages site configured to build from GitHub Actions on first run. If the
+repository policy or token does not permit that, an owner/admin must do it once:
+
+1. Repository **Settings → Pages**.
+2. **Build and deployment → Source: GitHub Actions**.
+
+Without this setting the `Pages` workflow fails at "Configure Pages" with
+`Get Pages site failed ... Not Found`. After the setting is applied, re-run the
+workflow. The site is static documentation/download only; it never processes
+audio.
+
+## 8. Publication
 
 - [ ] Update `CHANGELOG.md`, `docs/PROJECT_STATE.md`, `docs/VERIFICATION.md`
       with real results.
-- [ ] Tag the release and attach the installer, portable zip, model package and
-      `SHA256SUMS.txt`.
-- [ ] Confirm the GitHub Pages download button resolves to the tested asset.
+- [ ] Tag the release (`v0.1.0`) and confirm the release workflow attaches:
+      installer, portable zip, model package and `SHA256SUMS.txt`.
+- [ ] Confirm no release notes or links reference an asset that does not exist.
+- [ ] Confirm the GitHub Pages download links resolve to the tested assets.
 - [ ] Confirm no models, `vendor/`, databases or real recordings are committed.
 
 ## Status states

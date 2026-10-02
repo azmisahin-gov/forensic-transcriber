@@ -55,6 +55,83 @@ function segmentConfidence(tokens) {
   return Math.round(mean * 1000) / 1000;
 }
 
+// ggml_backend_dev_type: 0 = CPU, 1 = GPU, 2 = iGPU, 3 = accelerator.
+const GPU_DEVICE_TYPES = new Set([1, 2]);
+
+/** Minimal 16 kHz mono PCM WAV (0.2 s of silence) used to load the engine for a capability probe. */
+function silentWavBuffer() {
+  const sampleRate = 16000;
+  const samples = Math.round(sampleRate * 0.2);
+  const dataBytes = samples * 2;
+  const buf = Buffer.alloc(44 + dataBytes);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataBytes, 40);
+  return buf;
+}
+
+/**
+ * Parse whisper.cpp stderr to determine the real runtime capability of a binary.
+ *
+ * This is the only trustworthy source of truth: the engine prints its device
+ * list, its backend count, the backend it selected, and a system-info line that
+ * lists the compiled-in backend registrations (for example "CUDA : ..."). A
+ * binary compiled without CUDA reports `backends = 1` and no CUDA registration,
+ * even though the `-ng`/`-dev` options are always present in `--help`.
+ */
+function parseRuntimeProbe(stderr) {
+  const text = String(stderr || '');
+  const num = (re) => {
+    const m = re.exec(text);
+    return m ? Number(m[1]) : null;
+  };
+  const devices = num(/devices\s*=\s*(\d+)/);
+  const backends = num(/backends\s*=\s*(\d+)/);
+  const deviceList = [...text.matchAll(/device (\d+): (.+?) \(type: (\d+)\)/g)].map((m) => ({
+    index: Number(m[1]),
+    name: m[2].trim(),
+    type: Number(m[3]),
+  }));
+  const gpuDevices = deviceList.filter((d) => GPU_DEVICE_TYPES.has(d.type));
+  const systemInfo = (/system_info:.*/.exec(text) || [null])[0];
+  const cudaRegistered = /CUDA/i.test(systemInfo || '');
+  const usingBackend = (/using (.+?) backend/.exec(text) || [null, null])[1];
+  const foundGpu = /found GPU device/.test(text);
+  const noGpu = /no GPU found/.test(text);
+
+  // The binary is CUDA-capable when a CUDA backend is registered at load time,
+  // which shows up either as an extra backend (CPU + CUDA) or in system-info.
+  const cudaCapable = cudaRegistered || (backends !== null && backends >= 2) || gpuDevices.length > 0;
+
+  // A GPU is actually usable only when a GPU-type device is enumerated and the
+  // engine selected a non-CPU backend for it.
+  const gpuDeviceFound = gpuDevices.length > 0;
+  const gpuSelected = foundGpu && Boolean(usingBackend) && !/^cpu$/i.test(usingBackend);
+
+  return {
+    cudaCapable,
+    gpuDeviceFound,
+    gpuSelected,
+    gpuName: gpuDevices.length ? gpuDevices[0].name : null,
+    devices,
+    backends,
+    deviceList,
+    usingBackend: usingBackend || null,
+    systemInfo: systemInfo || null,
+    messages: { foundGpu, noGpu },
+  };
+}
+
 function parseSegments(transcription) {
   const segments = [];
   let index = 0;
@@ -99,17 +176,80 @@ class WhisperAdapter {
 
   async version() {
     try {
-      const r = await new Promise((resolve, reject) => {
+      const out = await new Promise((resolve, reject) => {
         const child = spawn(this.binaryPath, ['--version'], { windowsHide: true, shell: false });
-        let out = '';
-        child.stdout.on('data', (d) => (out += d));
-        child.stderr.on('data', (d) => (out += d));
+        let text = '';
+        child.stdout.on('data', (d) => (text += d));
+        child.stderr.on('data', (d) => (text += d));
         child.on('error', reject);
-        child.on('close', () => resolve(out));
+        child.on('close', () => resolve(text));
       });
-      return out.trim();
+      return out.trim() || null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Determine what the binary can actually do, by loading a model and reading the
+   * engine's own device/backend report. This distinguishes a CUDA-capable binary
+   * from a CPU-only one, and reports whether a GPU was really selected — it never
+   * infers capability from the presence of the `-ng` option or from the host
+   * having an NVIDIA device.
+   *
+   * @returns {Promise<{ok:boolean, reason?:string, cudaCapable:boolean, gpuSelected:boolean, ...}>}
+   */
+  async probeRuntime({ modelPath = this.modelPath, timeoutMs = 120000 } = {}) {
+    if (!modelPath || !fs.existsSync(modelPath)) {
+      return { ok: false, reason: 'MODEL_NOT_INSTALLED', cudaCapable: false, gpuSelected: false };
+    }
+    let dir = null;
+    try {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-probe-'));
+      const wav = path.join(dir, 'silence.wav');
+      fs.writeFileSync(wav, silentWavBuffer());
+      const { code, stderr } = await new Promise((resolve, reject) => {
+        const child = spawn(this.binaryPath, ['-m', modelPath, '-f', wav, '-nt'], {
+          windowsHide: true,
+          shell: false,
+        });
+        let out = '';
+        const timer = setTimeout(() => {
+          try {
+            child.kill();
+          } catch {
+            /* ignore */
+          }
+          reject(Object.assign(new Error('runtime probe timed out'), { code: 'PROBE_TIMEOUT' }));
+        }, timeoutMs);
+        child.stdout.on('data', (d) => (out += d));
+        child.stderr.on('data', (d) => {
+          out += d;
+          if (out.length > 2 * 1024 * 1024) out = out.slice(-1024 * 1024);
+        });
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+        child.on('close', (c) => {
+          clearTimeout(timer);
+          resolve({ code: c, stderr: out });
+        });
+      });
+      if (code !== 0) {
+        return { ok: false, reason: 'PROBE_FAILED', cudaCapable: false, gpuSelected: false, stderr: stderr.slice(-2000) };
+      }
+      return { ok: true, ...parseRuntimeProbe(stderr) };
+    } catch (err) {
+      return { ok: false, reason: err.code || 'PROBE_ERROR', cudaCapable: false, gpuSelected: false };
+    } finally {
+      if (dir) {
+        try {
+          fs.rmSync(dir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 
@@ -232,10 +372,12 @@ class WhisperAdapter {
           /* ignore */
         }
         if (onProgress) onProgress({ percent: 100, stage: 'done' });
+        const runtime = parseRuntimeProbe(stderr);
         resolve({
           segments,
           language: (parsed.result && parsed.result.language) || language,
           engine: 'whisper.cpp',
+          runtime,
           raw: {
             systemInfo: parsed.systeminfo || null,
             modelType: parsed.model ? parsed.model.type : null,
@@ -246,4 +388,4 @@ class WhisperAdapter {
   }
 }
 
-module.exports = { WhisperAdapter, parseSegments, tokensToWords };
+module.exports = { WhisperAdapter, parseSegments, tokensToWords, parseRuntimeProbe, silentWavBuffer };

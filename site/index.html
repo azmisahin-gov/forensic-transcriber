@@ -78,22 +78,32 @@
       <h2>Download &amp; install</h2>
       <div class="cards">
         <div class="card">
-          <h3>Standard release</h3>
-          <p>One installer. Model installed separately from inside the app.</p>
+          <h3>Standard installer</h3>
+          <p>Recommended. One installer. A speech model is installed separately from inside the app.</p>
           <code>ForensicTranscriber-Setup-x64.exe</code>
         </div>
         <div class="card">
           <h3>Portable</h3>
           <p>Unzip and run. No installation step.</p>
-          <code>ForensicTranscriber-Portable-x64.zip</code>
+          <a class="btn btn-small" id="download-portable" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download portable zip</a>
         </div>
         <div class="card">
           <h3>Offline model package</h3>
           <p>Default ASR model + VAD, with a checksummed manifest. For air-gapped machines.</p>
-          <code>ForensicTranscriber-ModelPack-*.zip</code>
+          <a class="btn btn-small" id="download-modelpack" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download model package</a>
         </div>
       </div>
-      <p>Every release publishes <code>SHA256SUMS.txt</code> for all artefacts.</p>
+      <p>
+        Every release publishes <code>SHA256SUMS.txt</code> for all artefacts. The standard
+        installer and portable zip do not include a model; on first launch open
+        <strong>Models → Install</strong>, or import the offline model package.
+      </p>
+      <p class="fineprint">
+        GPU: the application uses the bundled CUDA runtime when the machine has a supported
+        NVIDIA GPU, and otherwise runs on the CPU. Open the app and press
+        <strong>Check engine</strong> to see whether the installed runtime is CUDA-capable and
+        which device a run used.
+      </p>
       <h3>Quick start</h3>
       <ol class="steps">
         <li>Download and run the installer.</li>

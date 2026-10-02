@@ -52,6 +52,18 @@
           This software is a technical transcription and review aid. It does not itself constitute a
           forensic opinion, legal assessment, speaker identification, or authenticity determination.
         </p>
+        <div id="first-run-model" class="first-run hidden">
+          <h2>Step 1 — install a speech model</h2>
+          <p class="small">
+            No speech model is installed yet. The standard installer ships without one.
+            Download the recommended model (about 547&nbsp;MiB), or import the offline model package
+            you downloaded, to begin transcribing.
+          </p>
+          <div class="first-run-actions">
+            <button id="btn-first-run-install" class="btn btn-primary" type="button">Install recommended model</button>
+            <button id="btn-first-run-models" class="btn" type="button">Open Models</button>
+          </div>
+        </div>
       </section>
 
       <section id="case-view" class="case-view hidden">
@@ -110,7 +122,9 @@
                   </label>
                   <button id="btn-transcribe" class="btn btn-primary" type="button">Transcribe</button>
                   <button id="btn-cancel" class="btn btn-danger hidden" type="button">Cancel</button>
+                  <button id="btn-check-engine" class="btn btn-small" type="button">Check engine</button>
                 </div>
+                <p id="engine-status" class="engine-status small muted"></p>
                 <div id="progress-wrap" class="progress-wrap hidden">
                   <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
                   <span id="progress-label" class="small muted">Preparing…</span>

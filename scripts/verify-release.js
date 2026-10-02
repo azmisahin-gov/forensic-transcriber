@@ -116,6 +116,39 @@ function main() {
     } else {
       record('packaged acceptance test', false, 'skipped: model not present');
     }
+
+    // Engine capability report: distinguishes a CUDA-capable runtime from a
+    // CPU-only one and records which device a run used. Informational for the
+    // gate; the GPU state itself is reported honestly (unverified without a GPU).
+    if (fs.existsSync(asrModel)) {
+      const fixture = path.join(REPO_ROOT, 'tests', 'fixtures', 'tr-offset.wav');
+      const engineArgs = ['--engine-report', '--engine-model', 'large-v3-turbo-q5_0', '--engine-audio', fixture, '--no-sandbox'];
+      const eng = have('xvfb-run') && platform === 'linux'
+        ? spawnSync('xvfb-run', ['-a', './' + path.relative(REPO_ROOT, path.join(appDir, appName)), ...engineArgs], {
+            cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, FT_DATA_DIR: dataDir, FT_MODELS_DIR: modelsDir },
+          })
+        : spawnSync(path.join(appDir, appName), engineArgs, { encoding: 'utf8', env: { ...process.env, FT_DATA_DIR: dataDir, FT_MODELS_DIR: modelsDir } });
+      const em = /ENGINE_REPORT (\{.*\})/.exec(eng.stdout + eng.stderr);
+      if (em) {
+        const rep = JSON.parse(em[1]);
+        const cap = rep.capability || {};
+        const gpuBundled = Boolean(rep.gpuRuntimeBundled);
+        const mode = rep.transcription ? rep.transcription.selectedMode : 'n/a';
+        record(
+          'engine capability report',
+          eng.status === 0 && cap.cpuBinary && cap.cpuBinary.ok,
+          `cpu ok, gpu runtime ${gpuBundled ? 'bundled' : 'not bundled'}, run mode ${mode}`
+        );
+        // eslint-disable-next-line no-console
+        console.log(
+          gpuBundled
+            ? 'INFO  GPU runtime is bundled; verify GPU selection on the target NVIDIA machine with --engine-report.'
+            : 'INFO  CPU-only runtime bundled. GPU transcription is NOT available in this build (documented, not faked).'
+        );
+      } else {
+        record('engine capability report', false, 'no ENGINE_REPORT produced');
+      }
+    }
   } else {
     record('packaged app tests', false, 'skipped: packaged app not found (run the packaging step)');
   }

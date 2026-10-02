@@ -22,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Build whisper.cpp (static, Windows x64)
+      - name: Build whisper.cpp (static CPU, Windows x64)
         shell: bash
         run: |
           git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp.git build/whisper.cpp
@@ -32,10 +32,36 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON
           cmake --build build-static --config Release -j"$(nproc)"
 
+      - name: Build whisper.cpp (CUDA, Windows x64)
+        id: cuda
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ -z "$CUDA_PATH" ]; then echo "CUDA_PATH not set"; exit 1; fi
+          cd build/whisper.cpp
+          cmake -B build-cuda -A x64 -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build-cuda --config Release --target whisper-cli -j"$(nproc)"
+          mkdir -p "$GITHUB_WORKSPACE/cuda-out"
+          cp build-cuda/bin/Release/whisper-cli.exe "$GITHUB_WORKSPACE/cuda-out/"
+          cp "$CUDA_PATH"/bin/cudart64_*.dll "$GITHUB_WORKSPACE/cuda-out/" || true
+          cp "$CUDA_PATH"/bin/cublas64_*.dll "$GITHUB_WORKSPACE/cuda-out/" || true
+          cp "$CUDA_PATH"/bin/cublasLt64_*.dll "$GITHUB_WORKSPACE/cuda-out/" || true
+          ls -la "$GITHUB_WORKSPACE/cuda-out"
+
       - name: Fetch pinned FFmpeg and stage Windows runtime
+        shell: bash
         env:
           FT_WHISPER_WIN_BIN: ${{ github.workspace }}/build/whisper.cpp/build-static/bin/Release/whisper-cli.exe
-        run: node scripts/fetch-runtime-windows.js
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/cuda-out/whisper-cli.exe" ]; then
+            export FT_WHISPER_WIN_CUDA_DIR="$GITHUB_WORKSPACE/cuda-out"
+            echo "Staging CUDA runtime from cuda-out."
+          else
+            echo "No CUDA runtime built; packaging CPU runtime only."
+          fi
+          node scripts/fetch-runtime-windows.js
 
       - name: Lint and unit tests
         run: |
