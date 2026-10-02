@@ -126,6 +126,27 @@ jobs:
         with:
           path: artefacts
           merge-multiple: true
+      - name: Verify expected assets are present
+        run: |
+          set -e
+          missing=0
+          for f in ForensicTranscriber-Setup-x64.exe ForensicTranscriber-Portable-x64.zip; do
+            if ! find artefacts -type f -name "$f" | grep -q .; then echo "MISSING: $f"; missing=1; fi
+          done
+          if ! find artefacts -type f -name 'ForensicTranscriber-ModelPack-*.zip' | grep -q .; then
+            echo "MISSING: ForensicTranscriber-ModelPack-*.zip"; missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then echo "Release would reference nonexistent assets."; exit 1; fi
+          echo "All expected assets present."
+      - name: Generate combined SHA256SUMS
+        run: |
+          set -e
+          cd artefacts
+          rm -f SHA256SUMS.txt
+          find . -type f \( -name '*.exe' -o -name '*.zip' \) -print0 \
+            | sort -z | xargs -0 sha256sum | sed 's#  ./#  #' > SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

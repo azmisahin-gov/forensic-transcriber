@@ -52,6 +52,13 @@ Built by `scripts/build-model-package.js`: default ASR + VAD models, a
 checksummed `manifest.json`, and a README. Model files are verified against
 `docs/model-notes.md` before being included.
 
+RELEASE DISTRIBUTABILITY: the artefacts above were built and checksum-verified in
+this environment. The published **v0.1.0 GitHub Release is not distributable**:
+the Windows release workflow did not complete, so the release currently contains
+only GitHub's automatic source archives and **no** `.exe`, portable `.zip`, model
+package or `SHA256SUMS.txt`. Do not treat v0.1.0 as a usable download until that
+workflow succeeds and attaches those assets.
+
 GITHUB PAGES: `site/` (static documentation + download portal). No audio
 processing on the site; the download button points at the latest release asset.
 Publishing requires enabling Pages for the repository (a repository setting).
@@ -100,7 +107,7 @@ small 15.12 %) were the basis for the model decision and are recorded in
 
 TEST RESULTS:
 
-- Unit tests: **41/41 pass.**
+- Unit tests: **42/42 pass.**
 - Integration tests (pipeline + timestamp contract): **4/4 pass.**
 - Red-team tests: **15/15 pass.**
 - Lint: **35 files, 0 problems.**

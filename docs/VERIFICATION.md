@@ -20,12 +20,17 @@ Every result below comes from a command actually run in the build environment on
 
 Command: `node --test tests/unit/*.test.js`
 
-Result: **41 passed, 0 failed.** Covers the transcript store (edit/split/merge,
+Result: **42 passed, 0 failed.** Covers the transcript store (edit/split/merge,
 undo/redo, status rules, the "never invent words" placeholder), exports (SRT time
 formatting, JSON schema and status distinction, HTML escaping and
-self-containment) and storage (case layout, hashing without modifying the
-original, name sanitisation, ordering validation, persistence across reopen,
-cascade delete).
+self-containment), storage (case layout, hashing without modifying the original,
+name sanitisation, ordering validation, persistence across reopen, cascade
+delete), the runtime-probe parser, the runtime selector, and `version()`.
+
+The `version()` regression test uses `process.execPath` (the Node binary running
+the test) with a temporary script as its fixture. This is a genuine executable on
+Windows, Linux and macOS and does not depend on a POSIX execute bit, so the same
+assertion runs on every supported CI platform.
 
 ## 2. Integration tests — pipeline and timestamp contract
 
