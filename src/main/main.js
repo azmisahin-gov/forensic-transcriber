@@ -12,6 +12,7 @@ const { Logger } = require('./services/logger');
 const { MediaService } = require('./services/media');
 const { ModelManager } = require('./services/model-manager');
 const { WhisperAdapter } = require('./services/whisper');
+const { RuntimeSelector } = require('./services/runtime-selector');
 const { runExport } = require('./services/exporter');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
 
@@ -46,6 +47,12 @@ let logger = null;
 let media = null;
 let modelManager = null;
 let whisper = null;
+let runtimeSelector = null;
+
+/** Result of the most recent transcription, used to report the actual runtime mode. */
+let lastRunMode = null;
+/** Cached runtime capability probe (distinguishes CUDA-capable from CPU-only). */
+let engineProbeCache = null;
 
 /** Active transcription jobs keyed by webContents id. */
 const jobs = new Map();
@@ -220,7 +227,27 @@ function registerIpc() {
       defaultModelId: DEFAULT_ASR_MODEL_ID,
       supportedExtensions: SUPPORTED_EXTENSIONS,
       storage: storage.stats(),
+      engineProbe: engineProbeCache,
+      lastRunMode,
     };
+  });
+
+  // Report what the ASR runtimes can actually do. Requires an installed model
+  // (the engine must load one to enumerate devices); the result is cached.
+  handle(IPC.APP_ENGINE_PROBE, async (_e, { force = false } = {}) => {
+    if (engineProbeCache && !force) return engineProbeCache;
+    const asrModel = modelManager.resolvePath(DEFAULT_ASR_MODEL_ID);
+    runtimeSelector.setModelPath(asrModel);
+    runtimeSelector.setVadModelPath(modelManager.resolvePath(DEFAULT_VAD_MODEL_ID));
+    const capability = await runtimeSelector.capability({ force });
+    engineProbeCache = {
+      ...capability,
+      engineVersion: await whisper.version(),
+      cpuBinaryPath: runtimeSelector.cpuPath,
+      gpuBinaryPath: runtimeSelector.gpuPath,
+      probedAt: new Date().toISOString(),
+    };
+    return engineProbeCache;
   });
 
   handle(IPC.PATHS, async () => ({
@@ -405,12 +432,27 @@ function registerIpc() {
       if (controller.signal.aborted) throw Object.assign(new Error('Transcription cancelled.'), { code: 'TRANSCRIPTION_CANCELLED' });
 
       emit({ kind: 'stage', stage: 'loading-model', percent: 5 });
-      whisper.modelPath = modelManager.resolvePath(asrId);
-      whisper.vadModelPath = vadStatus.exists ? modelManager.resolvePath(DEFAULT_VAD_MODEL_ID) : null;
+      const asrModelPath = modelManager.resolvePath(asrId);
+      const vadModelPath = vadStatus.exists ? modelManager.resolvePath(DEFAULT_VAD_MODEL_ID) : null;
+      whisper.modelPath = asrModelPath;
+      whisper.vadModelPath = vadModelPath;
+      runtimeSelector.setModelPath(asrModelPath);
+      runtimeSelector.setVadModelPath(vadModelPath);
 
-      storage.recordHistory(caseId, HISTORY_ACTIONS.TRANSCRIPTION_STARTED, evidenceId, { modelId: asrId, language });
+      // Pick the CPU or CUDA runtime based on what the binaries can actually do,
+      // not on the host merely having an NVIDIA device.
+      const selection = await runtimeSelector.selectAdapter(useGpu);
+      const activeAdapter = selection.adapter;
+      emit({ kind: 'stage', stage: 'runtime', runtimeMode: selection.mode, runtimeReason: selection.reason });
 
-      const result = await whisper.transcribe(derivedPath, {
+      storage.recordHistory(caseId, HISTORY_ACTIONS.TRANSCRIPTION_STARTED, evidenceId, {
+        modelId: asrId,
+        language,
+        runtimeMode: selection.mode,
+        runtimeReason: selection.reason,
+      });
+
+      const result = await activeAdapter.transcribe(derivedPath, {
         language,
         useGpu,
         useVad,
@@ -428,10 +470,22 @@ function registerIpc() {
         source: 'asr',
       });
       emit({ kind: 'stage', stage: 'done', percent: 100 });
+      lastRunMode = {
+        mode: selection.mode,
+        reason: selection.reason,
+        gpuRuntimeBundled: selection.gpuRuntimeBundled,
+        gpuSelected: result.runtime ? result.runtime.gpuSelected : selection.mode === 'gpu',
+        gpuName: result.runtime ? result.runtime.gpuName : null,
+        usingBackend: result.runtime ? result.runtime.usingBackend : null,
+        cudaCapable: result.runtime ? result.runtime.cudaCapable : false,
+        at: new Date().toISOString(),
+      };
       return {
         transcript: saved.transcript,
         segments: saved.segments,
         meta: result.raw,
+        runtime: result.runtime || null,
+        runtimeSelection: { mode: selection.mode, reason: selection.reason, gpuRuntimeBundled: selection.gpuRuntimeBundled },
       };
     } catch (err) {
       const code = err && err.code ? err.code : 'ASR_FAILED';
@@ -458,6 +512,8 @@ async function bootstrap() {
     modelPath: modelManager.resolvePath(DEFAULT_ASR_MODEL_ID),
     vadModelPath: modelManager.resolvePath(DEFAULT_VAD_MODEL_ID),
   });
+  runtimeSelector = new RuntimeSelector({ WhisperAdapter, modelPath: modelManager.resolvePath(DEFAULT_ASR_MODEL_ID) });
+  runtimeSelector.setVadModelPath(modelManager.resolvePath(DEFAULT_VAD_MODEL_ID));
 
   registerMediaProtocol();
   registerIpc();
@@ -470,6 +526,11 @@ async function bootstrap() {
 
   if (process.argv.includes('--acceptance-test')) {
     await runAcceptanceTest();
+    return;
+  }
+
+  if (process.argv.includes('--engine-report')) {
+    await runEngineReport();
     return;
   }
 
@@ -521,6 +582,12 @@ async function runSmokeTest() {
 
     const models = await modelManager.list();
     step('model registry readable', Array.isArray(models) && models.length >= 3);
+
+    // The runtime probe is exposed on the preload API and must resolve without
+    // requiring a GPU. With no model installed it reports MODEL_NOT_INSTALLED.
+    const probe = await mainWindow.webContents.executeJavaScript('window.ft.app.probeEngine()');
+    step('engine probe reachable', probe && probe.ok === true && 'cpuBinary' in probe.data);
+    step('engine reports gpuRuntimeBundled flag', typeof probe.data.gpuRuntimeBundled === 'boolean');
 
     report.ok = report.steps.every((s) => s.ok);
   } catch (err) {
@@ -645,6 +712,71 @@ async function runAcceptanceTest() {
   process.stdout.write(`ACCEPTANCE_RESULT ${JSON.stringify(report)}\n`);
   if (storage) storage.close();
   app.exit(report.ok ? 0 : 1);
+}
+
+/**
+ * Report the actual runtime capability of the packaged ASR binary and, when a
+ * model is present, which device a real transcription used. This is the
+ * mechanism that distinguishes a CUDA-capable binary from a CPU-only one and
+ * makes GPU support verifiable on the target machine instead of assumed.
+ */
+async function runEngineReport() {
+  const argOf = (flag, fallback) => {
+    const i = process.argv.indexOf(flag);
+    return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+  };
+  const modelId = argOf('--engine-model', DEFAULT_ASR_MODEL_ID);
+  const audio = argOf('--engine-audio', null);
+
+  const report = {
+    engine: 'whisper.cpp',
+    engineVersion: await whisper.version(),
+    modelId,
+    modelInstalled: false,
+    cpuBinaryPath: runtimeSelector.cpuPath,
+    gpuBinaryPath: runtimeSelector.gpuPath,
+    gpuRuntimeBundled: runtimeSelector.gpuRuntimeBundled,
+    capability: null,
+    transcription: null,
+  };
+
+  try {
+    const modelPath = modelManager.resolvePath(modelId);
+    report.modelInstalled = Boolean(modelPath);
+    if (modelPath) {
+      const vadPath = modelManager.resolvePath(DEFAULT_VAD_MODEL_ID);
+      runtimeSelector.setModelPath(modelPath);
+      runtimeSelector.setVadModelPath(vadPath);
+      report.capability = await runtimeSelector.capability({ force: true });
+
+      if (audio && fs.existsSync(audio)) {
+        const derivedDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ft-eng-'));
+        const derived = path.join(derivedDir, 'a.wav');
+        await media.toAsrWav(audio, derived);
+        const selection = await runtimeSelector.selectAdapter(true);
+        const result = await selection.adapter.transcribe(derived, { language: 'tr', useGpu: true, useVad: Boolean(vadPath) });
+        report.transcription = {
+          requested: 'gpu',
+          selectedMode: selection.mode,
+          selectionReason: selection.reason,
+          gpuSelected: result.runtime.gpuSelected,
+          gpuName: result.runtime.gpuName,
+          usingBackend: result.runtime.usingBackend,
+          cudaCapable: result.runtime.cudaCapable,
+          segments: result.segments.length,
+        };
+        fs.rmSync(derivedDir, { recursive: true, force: true });
+      }
+    }
+  } catch (err) {
+    report.error = err.message;
+  }
+
+  // eslint-disable-next-line no-console
+  process.stdout.write(`ENGINE_REPORT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  const cpuOk = report.capability && report.capability.cpuBinary && report.capability.cpuBinary.ok;
+  app.exit(cpuOk ? 0 : 1);
 }
 
 app.on('window-all-closed', () => {

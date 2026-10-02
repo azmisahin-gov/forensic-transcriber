@@ -119,10 +119,44 @@ function stageWhisper() {
   console.log(`  staged whisper-cli.exe (sha256 ${digest})`);
 }
 
+/**
+ * Stage the optional CUDA runtime. The CUDA-enabled whisper-cli.exe and its
+ * redistributable NVIDIA runtime DLLs (EULA Attachment A: cudart/cublas/cublasLt)
+ * are placed in a `gpu/` sub-directory so they never collide with the CPU
+ * runtime. This step is skipped when no CUDA build is available; the release
+ * then ships the CPU runtime only and the application reports CPU mode.
+ */
+function stageGpuRuntime() {
+  const cudaDir = process.env.FT_WHISPER_WIN_CUDA_DIR;
+  const gpuDir = path.join(vendorDir, 'gpu');
+  if (!cudaDir) {
+    // eslint-disable-next-line no-console
+    console.log('  GPU runtime not provided (FT_WHISPER_WIN_CUDA_DIR unset); CPU runtime only.');
+    return;
+  }
+  const cudaCli = path.join(cudaDir, 'whisper-cli.exe');
+  if (!fs.existsSync(cudaCli)) {
+    throw new Error(`FT_WHISPER_WIN_CUDA_DIR is set but ${cudaCli} does not exist.`);
+  }
+  fs.mkdirSync(gpuDir, { recursive: true });
+  fs.copyFileSync(cudaCli, path.join(gpuDir, 'whisper-cli.exe'));
+  const staged = [['whisper-cli.exe', sha256(path.join(gpuDir, 'whisper-cli.exe'))]];
+  for (const entry of fs.readdirSync(cudaDir)) {
+    if (/^(cudart64_|cublas64_|cublasLt64_).*\.dll$/i.test(entry)) {
+      fs.copyFileSync(path.join(cudaDir, entry), path.join(gpuDir, entry));
+      staged.push([entry, sha256(path.join(gpuDir, entry))]);
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.log('  staged CUDA runtime into vendor/win-x64/bin/gpu:');
+  for (const [name, digest] of staged) console.log(`    ${name} (sha256 ${digest})`);
+}
+
 async function main() {
   fs.mkdirSync(vendorDir, { recursive: true });
   await stageFfmpeg();
   stageWhisper();
+  stageGpuRuntime();
   // eslint-disable-next-line no-console
   console.log(`\nWindows runtime staged in ${vendorDir}`);
 }

@@ -125,6 +125,54 @@ Single repository, single application. `src/main`, `src/renderer`,
 `src/shared`, `scripts`, `tests`, `site`, `docs`. No package explosion. The
 original suggested `app/` directory is realized as `src/`.
 
+## D11 — GPU runtime: two binaries, probe-verified selection
+
+**Context (release-hardening audit).** The first release shipped a CPU-only
+`whisper-cli.exe` while the documentation said GPU support existed. Verified by
+running the packaged binary: `devices = 1`, `backends = 1`,
+`device 0: CPU (type: 0)`, `no GPU found`. The `-ng`/`-dev` options appear in
+`--help` on every build, so their presence proves nothing.
+
+**Decision.** Ship two runtimes and select between them by evidence:
+
+```
+vendor/<os>-<arch>/bin/whisper-cli(.exe)        CPU runtime — always present
+vendor/<os>-<arch>/bin/gpu/whisper-cli(.exe)    CUDA runtime — optional
+vendor/<os>-<arch>/bin/gpu/cudart64_*.dll       CUDA redistributables (EULA Attachment A)
+vendor/<os>-<arch>/bin/gpu/cublas64_*.dll
+vendor/<os>-<arch>/bin/gpu/cublasLt64_*.dll
+```
+
+Selection (`src/main/services/runtime-selector.js`) uses the engine's own
+device/backend report, never the host's hardware:
+
+- operator chose CPU → CPU runtime;
+- no GPU runtime bundled → CPU runtime (`GPU_RUNTIME_NOT_BUNDLED`);
+- GPU runtime bundled but not CUDA-capable → CPU runtime (`GPU_BINARY_NOT_CUDA`);
+- CUDA-capable but no GPU device enumerated → CPU runtime (`NO_GPU_DEVICE`);
+- CUDA-capable with a GPU device enumerated → GPU runtime (`GPU_AVAILABLE`).
+
+The chosen mode and reason are reported in the UI, in the case history and by the
+`--engine-report` self-test.
+
+**Why two binaries instead of one.** A single CUDA-enabled binary would require
+shipping the CUDA runtime DLLs to every user, including those without an NVIDIA
+GPU, enlarging the installer and adding a large third-party payload for no
+benefit. Two binaries keep the universal fallback small and self-contained.
+
+**Why the CUDA binary is built in CI, not here.** The CUDA compiler (`nvcc`)
+and an NVIDIA toolchain are required; they are not available in the Linux build
+environment and cannot be cross-compiled. The CUDA runtime is therefore built on
+the `windows-latest` runner (`scripts/build-whisper-cuda-windows.cmd`,
+`.github/workflows/release.yml`) and staged only if that build succeeds. When it
+does not, the release ships the CPU runtime and the application reports CPU mode
+— it never claims GPU support it does not have.
+
+**Redistribution.** `cudart64_*`, `cublas64_*` and `cublasLt64_*` are listed as
+redistributable in the NVIDIA CUDA Toolkit EULA, Attachment A. They are copied
+from the CUDA Toolkit install by the build script; they are never committed to
+this repository.
+
 ## Rejected alternatives (summary)
 
 | Rejected | Reason |
@@ -135,3 +183,5 @@ original suggested `app/` directory is realized as `src/`.
 | Committing models to the repository | Binary bloat and license mixing; models have their own provenance. |
 | Server database / cloud | Violates the offline-first, no-account requirement. |
 | Browser (WebGPU) transcription | WebGPU is not baseline across browsers; the real workflow must be a desktop app. |
+| One CUDA-only binary | Forces the CUDA runtime DLLs onto every user, including those without an NVIDIA GPU. |
+| Claiming GPU support from `-ng`/`useGpu` | Those exist in every build and prove nothing about capability. |

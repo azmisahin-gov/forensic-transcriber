@@ -7,7 +7,8 @@ VERSION: 0.1.0
 COMMIT: see the repository's initial release commit (this document ships with it)
 
 ASR ENGINE: whisper.cpp v1.9.4 (2026-09-11), invoked as `whisper-cli` over a
-16 kHz mono WAV working copy. Adapter: `src/main/services/whisper.js`.
+16 kHz mono WAV working copy. Adapter: `src/main/services/whisper.js`. Two
+runtimes: a static CPU binary and an optional CUDA binary.
 
 MODEL: Whisper **large-v3-turbo**, quantization **q5_0** by default
 (`ggml-large-v3-turbo-q5_0.bin`, 574 041 195 bytes).
@@ -58,11 +59,18 @@ Publishing requires enabling Pages for the repository (a repository setting).
 OFFLINE MODE: yes. No telemetry, no analytics, no login, no cloud, no audio
 upload. The only outbound call is the explicit, checksum-verified model download.
 
-GPU: code path present (`useGpu`, CUDA-enabled `whisper-cli`). Not exercised —
-no NVIDIA device in the build environment.
+GPU: two-runtime architecture. The CPU runtime always ships; an optional CUDA
+runtime (`bin/gpu/whisper-cli.exe` + `cudart64_*`, `cublas64_*`, `cublasLt64_*`
+DLLs, CUDA EULA Attachment A) is staged by the release workflow when the CUDA
+build on `windows-latest` succeeds. Selection is by the engine's own
+device/backend report (`src/main/services/runtime-selector.js`), never by the
+host having an NVIDIA device. **Not verified on target NVIDIA hardware** — no
+NVIDIA GPU or CUDA toolkit in the build environment. The application reports the
+real runtime mode on the user's machine via `--engine-report` / **Check engine**.
 
 CPU FALLBACK: verified. A GPU request on a CPU-only build and on a machine with
-no GPU completed successfully on CPU.
+no GPU completed successfully on CPU, with the selection reason recorded
+(`GPU_RUNTIME_NOT_BUNDLED`).
 
 BENCHMARK RESULTS (CPU only, 4 vCPU, no GPU):
 
@@ -92,12 +100,22 @@ small 15.12 %) were the basis for the model decision and are recorded in
 
 TEST RESULTS:
 
-- Unit tests: **28/28 pass.**
-- Integration tests (pipeline + timestamp contract): **3/3 pass.**
+- Unit tests: **41/41 pass.**
+- Integration tests (pipeline + timestamp contract): **4/4 pass.**
 - Red-team tests: **15/15 pass.**
-- Lint: **25 files, 0 problems.**
-- Packaged-app smoke test: **9/9 pass.**
+- Lint: **35 files, 0 problems.**
+- Packaged-app smoke test: **11/11 pass.**
 - Packaged-app acceptance test: **20/20 pass.**
+- Engine capability report: CPU runtime confirmed; GPU runtime correctly
+  reported as not bundled in this build; run mode CPU.
+
+VALIDATION TIERS:
+
+- Automated validation — complete (all gates above).
+- Target-machine validation — **not performed** (no Windows host with an RTX
+  3060 here).
+- Real-world human corpus validation — **not performed**; accuracy figures are a
+  **synthetic benchmark** (espeak-ng TTS), not a human corpus.
 
 SECURITY REVIEW: 0 critical findings. Renderer sandboxed
 (`contextIsolation`, no `nodeIntegration`), strict CSP, narrow preload API,
@@ -117,14 +135,18 @@ are treated as separate from the code license.
 
 KNOWN LIMITATIONS:
 
-1. The Windows NSIS installer and portable zip were not launched on real Windows
+1. **Not verified on target NVIDIA hardware.** No NVIDIA GPU or CUDA toolkit was
+   available, so the CUDA runtime could not be compiled or exercised here. It is
+   built on the `windows-latest` CI runner. The application reports the real
+   runtime mode on the target machine.
+2. The Windows NSIS installer and portable zip were not launched on real Windows
    hardware here; the Windows binaries were validated under Wine instead.
-2. No GPU/CUDA verification (no NVIDIA device available).
-3. WER/CER measured on synthetic TTS audio, not a human reference corpus.
+3. Accuracy figures are a synthetic benchmark (espeak-ng TTS), not a human corpus.
 4. No PDF export.
 5. No automatic diarization.
 6. The executable is not code-signed.
 
-NEXT STEPS: run `npm run build:win` on Windows, install the NSIS artefact, run
-the acceptance scenario in `docs/RELEASE_CHECKLIST.md` including GPU
-transcription, and update `docs/VERIFICATION.md` with the observed results.
+NEXT STEPS: run `npm run build:win` on Windows (or let the release workflow run),
+install the NSIS artefact, then run the target-machine acceptance scenario in
+`docs/RELEASE_CHECKLIST.md` — including `--engine-report` on the RTX 3060 — and
+record the observed GPU mode in `docs/VERIFICATION.md`.

@@ -60,6 +60,7 @@
 
   const IPC = Object.freeze({
     APP_INFO: 'app:info',
+    APP_ENGINE_PROBE: 'app:engine-probe',
     PATHS: 'app:paths',
     CASE_CREATE: 'case:create',
     CASE_LIST: 'case:list',

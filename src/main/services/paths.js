@@ -37,6 +37,29 @@ function resolveBinary(name) {
   return exe; // rely on PATH
 }
 
+/**
+ * Resolve the optional GPU (CUDA) ASR runtime. It lives beside the CPU runtime
+ * in a `gpu/` sub-directory so the two never collide:
+ *
+ *   vendor/<os>-<arch>/bin/whisper-cli(.exe)        CPU runtime (always present)
+ *   vendor/<os>-<arch>/bin/gpu/whisper-cli(.exe)    CUDA runtime (optional)
+ *
+ * Returns null when no GPU runtime is bundled. The application then uses the
+ * CPU runtime and reports CPU mode.
+ */
+function resolveGpuBinary(name) {
+  const exe = process.platform === 'win32' ? `${name}.exe` : name;
+  const envKey = `FT_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_GPU_PATH`;
+  if (process.env[envKey] && fs.existsSync(process.env[envKey])) {
+    return process.env[envKey];
+  }
+  for (const dir of vendorDirs()) {
+    const candidate = path.join(dir, 'bin', 'gpu', exe);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function userDataDir() {
   if (process.env.FT_DATA_DIR) return process.env.FT_DATA_DIR;
   try {
@@ -57,6 +80,7 @@ module.exports = {
   REPO_ROOT,
   vendorDirs,
   resolveBinary,
+  resolveGpuBinary,
   userDataDir,
   modelsDir,
 };

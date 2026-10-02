@@ -28,6 +28,8 @@
     busy: false,
     progressUnsub: null,
     pollTimer: null,
+    engineProbe: null,
+    lastRunMode: null,
   };
 
   // ---------------------------------------------------------------- utilities
@@ -104,6 +106,55 @@
     }
   }
 
+  /**
+   * Show what the ASR runtimes can really do and which device the last run used.
+   * "CUDA-capable" (a GPU runtime is bundled and loads a CUDA backend) is kept
+   * distinct from "GPU in use" (a GPU was actually selected for a run). The
+   * presence of an NVIDIA device on the host is never treated as GPU support.
+   */
+  function renderEngineStatus(probe, lastRun) {
+    const el = $('#engine-status');
+    if (!el) return;
+    const parts = [];
+    if (!probe) {
+      parts.push('Engine capability not checked yet.');
+    } else {
+      const cpu = probe.cpuBinary || {};
+      if (!cpu.ok) {
+        parts.push('Engine check unavailable. Install a model, then check again.');
+      } else if (!probe.gpuRuntimeBundled) {
+        parts.push('Engine: CPU runtime only (no GPU runtime bundled).');
+      } else {
+        const gpu = probe.gpuBinary || {};
+        if (gpu.cudaCapable && gpu.gpuDeviceFound) {
+          parts.push(`Engine: CUDA runtime bundled, GPU detected (${gpu.gpuName || 'GPU'}).`);
+        } else if (gpu.cudaCapable) {
+          parts.push('Engine: CUDA runtime bundled, but no GPU detected on this machine.');
+        } else {
+          parts.push('Engine: GPU runtime bundled but not CUDA-capable.');
+        }
+      }
+    }
+    if (lastRun) {
+      parts.push(lastRun.mode === 'gpu' ? 'Last run: GPU.' : `Last run: CPU (${lastRun.reason || 'fallback'}).`);
+    }
+    el.textContent = parts.join(' ');
+    el.className = `engine-status small ${probe && probe.gpuUsable ? 'ok' : 'muted'}`;
+  }
+
+  async function checkEngine(force = false) {
+    try {
+      const probe = await call(api.app.probeEngine(force));
+      state.engineProbe = probe;
+      renderEngineStatus(probe, state.appInfo && state.appInfo.lastRunMode);
+      return probe;
+    } catch (err) {
+      renderEngineStatus(null, null);
+      toast(`Engine check failed: ${errText(err)}`, 'error');
+      return null;
+    }
+  }
+
   async function refreshModels() {
     try {
       state.models = await call(api.models.list());
@@ -124,6 +175,13 @@
     if (state.appInfo) state.appInfo.modelReady = ready;
     updateModelBadge();
     renderModelDialog();
+    // Once a verified model exists, probe the engine so the operator can see
+    // whether the binary is CUDA-capable and which device was selected.
+    if (ready && !state.engineProbe) {
+      checkEngine(false).catch(() => {});
+    } else {
+      renderEngineStatus(state.engineProbe, state.lastRunMode);
+    }
   }
 
   function renderModelDialog() {
@@ -618,6 +676,7 @@
         preparing: 'Preparing working copy…',
         decoding: 'Decoding audio…',
         'loading-model': 'Loading model…',
+        runtime: `Runtime: ${(payload.runtimeMode || 'cpu').toUpperCase()}`,
         transcribing: 'Transcribing…',
         done: 'Done',
       };
@@ -655,7 +714,19 @@
       state.store.replaceAll(res.segments);
       renderTranscript();
       $('#btn-export').disabled = false;
-      toast('Transcription complete. Review each segment against the audio.', 'success');
+      if (res.runtimeSelection) {
+        state.lastRunMode = {
+          mode: res.runtimeSelection.mode,
+          reason: res.runtimeSelection.reason,
+          gpuRuntimeBundled: res.runtimeSelection.gpuRuntimeBundled,
+        };
+      }
+      renderEngineStatus(state.engineProbe, state.lastRunMode);
+      const mode = res.runtimeSelection ? res.runtimeSelection.mode.toUpperCase() : null;
+      toast(
+        `Transcription complete${mode ? ` (${mode})` : ''}. Review each segment against the audio.`,
+        'success'
+      );
     } catch (err) {
       const el = $('#transcribe-error');
       el.textContent = errText(err) + (err.detail ? `\n${err.detail}` : '');
@@ -801,6 +872,10 @@
     });
 
     $('#btn-transcribe').addEventListener('click', startTranscription);
+    $('#btn-check-engine').addEventListener('click', async () => {
+      toast('Checking engine capability…');
+      await checkEngine(true);
+    });
     $('#btn-cancel').addEventListener('click', cancelTranscription);
     $('#btn-save').addEventListener('click', saveTranscript);
     $('#btn-export').addEventListener('click', openExportDialog);

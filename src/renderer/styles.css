@@ -172,6 +172,8 @@ textarea.input { resize: vertical; }
 .progress-track { flex: 1; height: 8px; border-radius: 999px; background: var(--bg-3); overflow: hidden; border: 1px solid var(--border); }
 .progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); transition: width .2s; }
 .error { color: #ffb4b4; background: #2a1616; border: 1px solid #5c2c2c; border-radius: 8px; padding: 9px 11px; margin-top: 10px; font-size: 12.5px; }
+.engine-status { margin: 8px 0 0; }
+.engine-status.ok { color: #7ce0ab; }
 
 .player-panel { margin-top: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
 .waveform { width: 100%; display: block; border-radius: 8px; cursor: pointer; }

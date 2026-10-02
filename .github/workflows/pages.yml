@@ -27,6 +27,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Enable Pages with "GitHub Actions" as the source if it is not already
+          # enabled. If the token/repo policy forbids this, the one-time manual
+          # step in docs/RELEASE_CHECKLIST.md (Settings -> Pages -> Source:
+          # GitHub Actions) is required instead.
+          enablement: true
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:

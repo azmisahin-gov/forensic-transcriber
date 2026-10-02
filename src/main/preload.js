@@ -12,6 +12,7 @@ const api = {
   app: {
     info: () => ipcRenderer.invoke(IPC.APP_INFO),
     paths: () => ipcRenderer.invoke(IPC.PATHS),
+    probeEngine: () => ipcRenderer.invoke(IPC.APP_ENGINE_PROBE),
   },
   cases: {
     create: (input) => ipcRenderer.invoke(IPC.CASE_CREATE, input),

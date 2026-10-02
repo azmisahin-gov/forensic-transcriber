@@ -67,7 +67,8 @@ FT_DATA_DIR=/tmp/ft-data FT_MODELS_DIR=/path/to/models \
 | `src/main/main.js` | window, IPC, media protocol, orchestration, self-tests |
 | `src/main/services/storage.js` | SQLite schema and persistence |
 | `src/main/services/media.js` | FFmpeg/FFprobe, safe spawn, waveform |
-| `src/main/services/whisper.js` | ASR adapter, output parsing, confidence |
+| `src/main/services/whisper.js` | ASR adapter, output parsing, confidence, runtime probe |
+| `src/main/services/runtime-selector.js` | chooses CPU vs CUDA runtime by engine evidence |
 | `src/main/services/model-manager.js` | model download/verify/import |
 | `src/main/services/exporter.js` + `exports.js` | export rendering |
 | `src/renderer/renderer.js` | UI orchestration |
@@ -82,6 +83,19 @@ FT_DATA_DIR=/tmp/ft-data FT_MODELS_DIR=/path/to/models \
   Use stable error `code`s, not string matching.
 - Comments explain *why*, not *what*. Avoid narrating changes.
 - Prefer editing existing files; do not create parallel versions.
+
+## GPU / runtime rules
+
+- Never claim GPU support from the presence of `-ng`/`-dev` in `--help` or from a
+  `useGpu` flag. Every build has those.
+- The only trustworthy capability signal is the engine's own report:
+  `devices`, `backends`, `device N: <name> (type: T)` and the `system_info:` line
+  (`CUDA :` registration). `parseRuntimeProbe()` reads exactly this.
+- The CPU runtime always ships and is the universal fallback. The CUDA runtime is
+  optional (`bin/gpu/`) and is used only when it loads a GPU backend.
+- GPU capability and GPU selection are separate facts. Report both.
+- If GPU behaviour cannot be verified (no NVIDIA hardware), mark it
+  `Not verified on target NVIDIA hardware`. Never fabricate a GPU result.
 
 ## Phase workflow (from the original task)
 

@@ -20,7 +20,7 @@ Every result below comes from a command actually run in the build environment on
 
 Command: `node --test tests/unit/*.test.js`
 
-Result: **28 passed, 0 failed.** Covers the transcript store (edit/split/merge,
+Result: **41 passed, 0 failed.** Covers the transcript store (edit/split/merge,
 undo/redo, status rules, the "never invent words" placeholder), exports (SRT time
 formatting, JSON schema and status distinction, HTML escaping and
 self-containment) and storage (case layout, hashing without modifying the
@@ -87,7 +87,7 @@ structured error rather than a crash:
 
 ## 4. Lint and security
 
-- `node scripts/lint.js` → **Lint OK — 25 files checked** (syntax plus
+- `node scripts/lint.js` → **Lint OK — 35 files checked** (syntax plus
   no-shell, no-eval, no-remote-script, no-hardcoded-secret, no-telemetry rules).
 - `node scripts/security-check.js` → **0 critical findings.** Confirmed:
   no telemetry dependency, the only outbound network path is the model
@@ -136,9 +136,10 @@ FT_DATA_DIR=... FT_MODELS_DIR=... xvfb-run -a \
   ./release/linux-unpacked/forensic-transcriber --smoke-test --no-sandbox
 ```
 
-Result: `{"ok":true, ...}` — **9/9 steps**: window loaded, preload API exposed,
+Result: `{"ok":true, ...}` — **11/11 steps**: window loaded, preload API exposed,
 `app.info` resolves, database open, FFmpeg available, FFprobe available, case
-create, case persisted, model registry readable.
+create, case persisted, model registry readable, engine probe reachable, engine
+reports `gpuRuntimeBundled` flag.
 
 ### Acceptance test
 
@@ -172,7 +173,29 @@ Result: `{"ok":true, ...}` — **20/20 steps**:
 
 ## 6. Windows x64 runtime
 
-whisper.cpp v1.9.4 was cross-compiled with mingw-w64 as a **fully static** binary.
+### 6a. GPU audit — the packaged binary is CPU-only
+
+This was the first thing checked in the release-hardening pass. Running the
+packaged binary and reading its own report (the `-ng`/`-dev` options appear in
+`--help` on every build, so they prove nothing):
+
+```
+$ ./release/linux-unpacked/resources/vendor/bin/whisper-cli -m ggml-small-q5_1.bin -f silent.wav -nt
+whisper_init_with_params_no_state: use gpu    = 1
+whisper_init_with_params_no_state: devices    = 1
+whisper_init_with_params_no_state: backends   = 1
+whisper_backend_init_gpu: device 0: CPU (type: 0)
+whisper_backend_init_gpu: no GPU found
+system_info: ... WHISPER : VITISAI = 0 | COREML = 0 | OPENVINO = 0 | CPU : AVX2 = 1 | OPENMP = 1 | REPACK = 1 |
+```
+
+`backends = 1` and the absence of a `CUDA :` registration mean the binary was
+compiled **without CUDA**. The original release therefore had no GPU support,
+contrary to the documentation. This is now corrected (section 6c).
+
+### 6b. CPU runtime (shipped)
+
+whisper.cpp v1.9.4 is cross-compiled with mingw-w64 as a **fully static** binary.
 
 ```
 $ x86_64-w64-mingw32-objdump -p whisper-cli.exe | grep "DLL Name"
@@ -182,9 +205,7 @@ $ x86_64-w64-mingw32-objdump -p whisper-cli.exe | grep "DLL Name"
 ```
 
 Only Windows system DLLs are required (no `libgomp-1.dll`, `libstdc++-6.dll` or
-`libgcc_s_seh-1.dll`).
-
-Functional check under Wine:
+`libgcc_s_seh-1.dll`). Functional check under Wine:
 
 ```
 $ wine whisper-cli.exe --version
@@ -196,11 +217,53 @@ $ wine whisper-cli.exe -m ggml-small-q5_1.bin -f simple.wav -l tr -oj -np
 [00:00:11.300 --> 00:00:16.500]   Telefon numara sibesi uzatu ziki, kirk bir, seksen yedi.
 ```
 
-The Windows binary decodes audio and produces Turkish output with timestamps.
-
 FFmpeg for Windows is a pinned, checksum-verified LGPL build
 (`ffmpeg-n8.1.3-14-g330caae0c1-win64-lgpl-8.1`), staged by
 `scripts/fetch-runtime-windows.js`.
+
+### 6c. GPU runtime (CUDA) — implemented, not verified here
+
+Two runtimes are supported. The CPU runtime always ships; the CUDA runtime is
+optional and lives in `bin/gpu/` with the redistributable NVIDIA DLLs
+(`cudart64_*`, `cublas64_*`, `cublasLt64_*`; CUDA EULA Attachment A). Selection
+is by the engine's own device/backend report — never by the host having a GPU
+(`src/main/services/runtime-selector.js`).
+
+Verification mechanism, run in this environment (CPU-only, no CUDA toolkit):
+
+```
+$ ./release/linux-unpacked/forensic-transcriber --engine-report \
+    --engine-model large-v3-turbo-q5_0 --engine-audio tests/fixtures/tr-offset.wav
+ENGINE_REPORT {
+  "engineVersion": "whisper.cpp version: 1.9.4-dev",
+  "gpuRuntimeBundled": false,
+  "capability": {
+    "cpuBinary":  { "ok": true, "cudaCapable": false, "gpuDeviceFound": false },
+    "gpuBinary":  null,
+    "gpuUsable":  false,
+    "recommendedMode": "cpu"
+  },
+  "transcription": {
+    "requested": "gpu",
+    "selectedMode": "cpu",
+    "selectionReason": "GPU_RUNTIME_NOT_BUNDLED",
+    "gpuSelected": false, "segments": 1
+  }
+}
+```
+
+This is the mechanism that distinguishes a CUDA-capable binary from a CPU-only
+one and reports the device actually used. The unit tests additionally cover the
+four selection outcomes (GPU available, CUDA binary without a device, non-CUDA
+"gpu" binary, probe failure).
+
+**Not verified on target NVIDIA hardware.** There is no NVIDIA GPU and no CUDA
+toolkit in the build environment, so the CUDA runtime could not be compiled or
+exercised here. The CUDA build runs on the `windows-latest` CI runner
+(`scripts/build-whisper-cuda-windows.cmd`). On the target RTX 3060 the operator
+can confirm the real mode with **Check engine** or `--engine-report`. GPU
+behaviour is therefore **unverified here and explicitly marked as such** — no
+GPU result is fabricated.
 
 ## 7. Benchmarks (RTF, memory)
 
@@ -260,29 +323,38 @@ close to large-v3 and small is materially worse on Turkish.
 
 **Caveat.** The reference is synthetic TTS audio (espeak-ng), not a human
 reference corpus, and the sample is tiny. These numbers must not be generalised
-to real case material. They are recorded to satisfy the release requirement that
-quality be measured rather than assumed.
+to real case material. This is a **synthetic benchmark**, not real-world
+validation. It is recorded to satisfy the release requirement that quality be
+measured rather than assumed.
 
 ## 9. What was NOT verified (honest limitations)
 
+- **Not verified on target NVIDIA hardware.** There is no NVIDIA GPU and no CUDA
+  toolkit in the build environment. The CUDA runtime is built on the
+  `windows-latest` CI runner; it could not be compiled or exercised here. The
+  application reports the real runtime mode on the user's machine
+  (`--engine-report` / **Check engine**), but no GPU result is claimed here. See
+  section 6c.
 - **The NSIS installer was not launched on real Windows hardware.** The
   environment is Linux. The Windows native binaries were validated under Wine;
   the packaging configuration was validated by building the Linux equivalent.
   This is the single most important remaining verification step and is listed as
   the next action in `docs/PROJECT_STATE.md`.
-- **No GPU / CUDA verification.** No NVIDIA device was available. The code path
-  exists (`useGpu`, `-ng` fallback) and the CPU fallback was verified, but GPU
-  acceleration was not exercised.
 - **No code-signing.** The executable is unsigned; no signed/trusted publisher
   claim is made.
-- **WER/CER uses synthetic audio**, as noted above.
+- **Accuracy is a synthetic benchmark**, not a human corpus, as noted above.
 - **No portable-zip launch test on Windows** (same reason as the installer).
 
 ## Release gate decision
 
-All automated, integration, red-team, lint, security and packaged-application
-acceptance tests pass. The Windows installer and portable zip build from pinned,
-checksum-verified sources. The remaining gap is execution on real Windows
-hardware with a GPU, which cannot be closed in this environment.
+All automated, integration, red-team, lint, security, packaged-application and
+engine-capability checks pass. The Windows installer, portable zip and offline
+model package build from pinned, checksum-verified sources.
+
+The remaining gap is **execution on real Windows hardware with an RTX 3060**,
+which cannot be closed in this environment: no NVIDIA GPU and no CUDA toolkit are
+available, so the CUDA runtime is built in CI and GPU behaviour is explicitly
+**unverified here**. The application reports the real runtime mode on the target
+machine so that gap can be closed there.
 
 Status: **COMPLETE WITH KNOWN LIMITATIONS.**
