@@ -175,6 +175,7 @@
     if (state.appInfo) state.appInfo.modelReady = ready;
     updateModelBadge();
     renderModelDialog();
+    renderFirstRun(ready);
     // Once a verified model exists, probe the engine so the operator can see
     // whether the binary is CUDA-capable and which device was selected.
     if (ready && !state.engineProbe) {
@@ -182,6 +183,13 @@
     } else {
       renderEngineStatus(state.engineProbe, state.lastRunMode);
     }
+  }
+
+  /** Make the "install a model first" step obvious on first launch. */
+  function renderFirstRun(ready) {
+    const el = $('#first-run-model');
+    if (!el) return;
+    el.classList.toggle('hidden', ready);
   }
 
   function renderModelDialog() {
@@ -902,6 +910,27 @@
     $('#btn-redo').addEventListener('click', () => state.store && state.store.redo());
 
     $('#btn-models').addEventListener('click', () => $('#dialog-models').showModal());
+    $('#btn-first-run-models').addEventListener('click', () => $('#dialog-models').showModal());
+    $('#btn-first-run-install').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const recommended = state.models.find((m) => m.kind === 'asr' && m.recommended);
+      if (!recommended) {
+        toast('No recommended model in the registry.', 'error');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Downloading…';
+      try {
+        await call(api.models.install(recommended.id));
+        toast('Model installed and verified.', 'success');
+      } catch (err) {
+        toast(`Model install failed: ${errText(err)}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Install recommended model';
+        await refreshModels();
+      }
+    });
     $('#dialog-models').addEventListener('close', refreshModels);
 
     $('#btn-reveal').addEventListener('click', () => {

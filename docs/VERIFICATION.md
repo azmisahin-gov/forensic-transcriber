@@ -253,9 +253,19 @@ ENGINE_REPORT {
 ```
 
 This is the mechanism that distinguishes a CUDA-capable binary from a CPU-only
-one and reports the device actually used. The unit tests additionally cover the
-four selection outcomes (GPU available, CUDA binary without a device, non-CUDA
-"gpu" binary, probe failure).
+one and reports the device actually used. It was also verified end-to-end with a
+**non-CUDA binary placed in the GPU slot** (to simulate a mislabelled runtime):
+the packaged application loaded it, read `backends = 1` / `device 0: CPU`, and
+refused to use it — selecting CPU with reason `GPU_BINARY_NOT_CUDA`:
+
+```
+"gpuRuntimeBundled": true,
+"capability": { "gpuBinary": { "ok": true, "cudaCapable": false, "gpuDeviceFound": false }, "gpuUsable": false },
+"transcription": { "requested": "gpu", "selectedMode": "cpu", "selectionReason": "GPU_BINARY_NOT_CUDA" }
+```
+
+The unit tests additionally cover the four selection outcomes (GPU available,
+CUDA binary without a device, non-CUDA "gpu" binary, probe failure).
 
 **Not verified on target NVIDIA hardware.** There is no NVIDIA GPU and no CUDA
 toolkit in the build environment, so the CUDA runtime could not be compiled or
