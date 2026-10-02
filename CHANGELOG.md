@@ -14,9 +14,22 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 - **`WhisperAdapter.version()` always returned `null`.** The output buffer was
   scoped inside the promise executor and was undefined outside it. A regression
   test covers this.
+- **The `version()` regression test was invalid on Windows.** It created a POSIX
+  shell script and only renamed it to `.exe`, so the Windows release job failed
+  with `actual: null`. The fixture is now the running Node executable
+  (`process.execPath`) plus a temporary script, which is a genuine executable on
+  Windows, Linux and macOS and exercises the same spawn/collect/close path.
+  A second test covers the "cannot spawn" branch.
 - **GitHub Pages workflow failed.** The repository Pages site was not enabled;
   `actions/configure-pages` now runs with `enablement: true`, and the one-time
   manual setting is documented in `docs/RELEASE_CHECKLIST.md`.
+- **The release workflow could publish an incomplete release.** `SHA256SUMS.txt`
+  is produced per job, but the `model-package` job never uploaded one and the
+  published release only took the first match, so the model package could be
+  omitted from the checksums. The final `release` job now verifies that the
+  installer, portable zip and model package are all present, generates one
+  combined `SHA256SUMS.txt` from the downloaded artefacts, and fails before
+  publishing if an expected asset is missing.
 
 ### Added
 

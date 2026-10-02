@@ -27,13 +27,13 @@ LAST_UPDATED: 2026-10-02
   the one-time manual setting is documented.
 - **Site download links.** Point at the real asset names through
   `releases/latest/download`; a portable and a model-package link were added.
-- **Docs consistency.** Corrected test counts (41 unit, 4 pipeline, 15 red-team),
+- **Docs consistency.** Corrected test counts (42 unit, 4 pipeline, 15 red-team),
   separated automated / target-machine / human-corpus validation tiers, and
   replaced the "real-world validation" label with "synthetic benchmark".
 
 ## Verified in this environment
 
-- Unit tests: 41/41 pass (`node --test tests/unit/*.test.js`).
+- Unit tests: 42/42 pass (`node --test tests/unit/*.test.js`).
 - Integration tests: 4/4 pipeline (incl. the offset timestamp contract) and
   15/15 red-team pass.
 - Lint: 0 problems.
@@ -47,6 +47,11 @@ LAST_UPDATED: 2026-10-02
 
 ## Not verified in this environment (known limitations)
 
+- **The v0.1.0 GitHub Release is not distributable.** The Windows release workflow
+  failed at the unit test stage, so the release contains only GitHub's automatic
+  source archives — no `.exe`, portable `.zip`, model package or `SHA256SUMS.txt`.
+  It becomes usable only after the workflow succeeds on `windows-latest` and
+  attaches those assets. No new tag was created by this fix.
 - **Not verified on target NVIDIA hardware.** There is no NVIDIA GPU and no CUDA
   toolkit in the build environment, so the CUDA runtime could not be compiled or
   exercised here. The CUDA build runs on the `windows-latest` CI runner. The

@@ -164,7 +164,7 @@ Validation is reported in three separate tiers. Do not read one tier as another.
 | Gate | Result |
 | --- | --- |
 | Lint | 0 problems (35 files) |
-| Unit tests | 41/41 pass |
+| Unit tests | 42/42 pass |
 | Integration tests — pipeline + timestamp contract | 4/4 pass |
 | Integration tests — red-team / hostile input | 15/15 pass |
 | Security check | 0 critical findings |

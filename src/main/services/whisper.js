@@ -158,10 +158,13 @@ function parseSegments(transcription) {
 }
 
 class WhisperAdapter {
-  constructor({ binaryPath, modelPath, vadModelPath } = {}) {
+  constructor({ binaryPath, modelPath, vadModelPath, versionArgs } = {}) {
     this.binaryPath = binaryPath || resolveBinary('whisper-cli');
     this.modelPath = modelPath || null;
     this.vadModelPath = vadModelPath || null;
+    // Extra argv used only by version(). Defaults to the engine's own flag; the
+    // tests override it so a cross-platform script can be used as the fixture.
+    this.versionArgs = Array.isArray(versionArgs) ? versionArgs : ['--version'];
     this.lastInvocation = null;
   }
 
@@ -177,7 +180,7 @@ class WhisperAdapter {
   async version() {
     try {
       const out = await new Promise((resolve, reject) => {
-        const child = spawn(this.binaryPath, ['--version'], { windowsHide: true, shell: false });
+        const child = spawn(this.binaryPath, this.versionArgs, { windowsHide: true, shell: false });
         let text = '';
         child.stdout.on('data', (d) => (text += d));
         child.stderr.on('data', (d) => (text += d));

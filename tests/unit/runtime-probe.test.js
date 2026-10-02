@@ -86,19 +86,42 @@ test('the probe WAV is a valid 16 kHz mono PCM header', () => {
 test('version() returns the engine banner from a real executable', () => {
   // Regression: the banner used to be discarded because the buffer was scoped
   // inside the promise executor, so version() always returned null.
+  //
+  // The fixture must be a real, platform-appropriate executable. A shell script
+  // renamed to `.exe` is not a valid Windows program, so instead we use the Node
+  // binary that is already running this test (process.execPath) together with a
+  // small script file. That is a genuine executable on Windows, Linux and macOS,
+  // and it exercises the real spawn/collect/close path of WhisperAdapter.version().
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
   const { WhisperAdapter } = require('../../src/main/services/whisper');
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-ver-'));
-  const fake = path.join(dir, process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli');
-  fs.writeFileSync(fake, '#!/bin/sh\necho "whisper.cpp version: 1.9.4-test"\n');
-  fs.chmodSync(fake, 0o755);
+  const script = path.join(dir, 'banner.js');
+  fs.writeFileSync(script, 'console.log("whisper.cpp version: 1.9.4-test");\n');
 
-  const adapter = new WhisperAdapter({ binaryPath: fake });
+  const adapter = new WhisperAdapter({
+    binaryPath: process.execPath,
+    versionArgs: [script],
+  });
+
   return adapter.version().then((v) => {
     assert.equal(v, 'whisper.cpp version: 1.9.4-test');
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+test('version() returns null when the executable cannot be spawned', () => {
+  // The error branch must not throw; it reports "unknown" as null. This is
+  // cross-platform: a missing path fails the same way on every OS.
+  const os = require('node:os');
+  const path = require('node:path');
+  const { WhisperAdapter } = require('../../src/main/services/whisper');
+
+  const missing = path.join(os.tmpdir(), 'ft-does-not-exist-whisper-cli');
+  const adapter = new WhisperAdapter({ binaryPath: missing });
+  return adapter.version().then((v) => {
+    assert.equal(v, null);
   });
 });
