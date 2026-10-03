@@ -5,6 +5,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-03
+
 ### Fixed
 
 - **The renderer crashed on startup in v0.1.1, leaving the UI completely dead.**
