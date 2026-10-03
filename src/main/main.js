@@ -1389,7 +1389,12 @@ app.on('before-quit', () => {
   if (storage) storage.close();
 });
 
-const gotLock = app.requestSingleInstanceLock();
+// Self-test modes are one-shot: two of them must be able to run concurrently
+// (for example the release gate running smoke and engine-report in sequence)
+// without the single-instance lock making the second one exit silently.
+const SELF_TEST_FLAGS = ['--smoke-test', '--acceptance-test', '--multi-evidence-test', '--engine-report'];
+const isSelfTest = process.argv.some((a) => SELF_TEST_FLAGS.includes(a));
+const gotLock = isSelfTest ? true : app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
