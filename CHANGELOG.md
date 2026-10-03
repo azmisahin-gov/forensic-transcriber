@@ -35,6 +35,13 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   provenance, atomic evidence import, fail-closed migration backup and
   binary-safe waveform (`tests/unit/p0-revision-lifecycle.test.js`,
   `tests/unit/p0-regression.test.js`).
+- **Full localization and i18n regression coverage.** Every remaining
+  hard-coded operator string (model import, DB integrity, case restore,
+  cancelling, drop-path error, engine check, postponed update, model badge,
+  play-from-here) now resolves through `t()`. The tr/en dictionaries are asserted
+  key-for-key identical (338 each), every `data-i18n` key in `index.html`
+  resolves in both locales, and an unknown locale falls back to Turkish
+  (`tests/unit/productization.test.js`).
 
 ### Fixed
 

@@ -179,6 +179,21 @@ make. Keeping reports and review aids purely additive preserves the P12 trust
 model and the offline-first guarantee (no new dependency; the DOCX/PDF/ZIP/TAR
 writers are in-repo).
 
+## D8d — UI is fully localized; Turkish is the default
+
+**Decision.** All operator-facing strings resolve through the in-repo
+`src/shared/i18n.js` dictionary (`t(key)`), driven by `data-i18n` attributes in
+the markup and `t()` calls in the renderer. Turkish is the default and English is
+a complete second locale; both dictionaries must expose exactly the same keys.
+An unknown or absent locale falls back to Turkish. No string is left hard-coded
+in the renderer.
+
+**Why.** A 56.12 expert work station is used by Turkish Ministry of Justice
+experts; a half-translated or partially hard-coded UI is a correctness and trust
+problem, not a cosmetic one. Key-for-key parity is enforced by a regression test
+so a new string cannot ship in only one language. Keeping the dictionary in-repo
+(no runtime dependency, no network fetch) preserves the offline-first guarantee.
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,

@@ -41,20 +41,25 @@ Implemented:
 
 ### Verified in this environment (P13)
 
-- `npm test` → 200 tests, 200 pass, 0 fail (unit + integration; FFmpeg 7.1.5
-  present).
-- `npm run lint` → Lint OK — 63 files.
+- `npm test` → 203 tests, 203 pass, 0 fail (172 unit + 31 integration; FFmpeg
+  7.1.5 present).
+- `npm run lint` → Lint OK — 64 files.
 - `node scripts/security-check.js` → 0 critical findings.
-- `tests/unit/productization.test.js` → 12 tests, all passing, exercising real
-  Storage/report/archive/delivery/support code and the real renderer libs.
+- `tests/unit/productization.test.js` → 15 tests, all passing, exercising real
+  Storage/report/archive/delivery/support code and the real renderer libs. This
+  now includes i18n coverage: the tr/en dictionaries expose exactly the same
+  keys (338 each), every `data-i18n` key used by `index.html` resolves in both
+  locales, and an unknown locale falls back to Turkish.
 - **Acceptance self-test (source launch, not the packaged binary):** the existing
   `release/linux-unpacked` binary predates these changes and was **not** rebuilt;
   the acceptance run used the current source via `electron .`:
   `FT_DATA_DIR=/tmp/ft-data-acc FT_MODELS_DIR=…/models xvfb-run -a
-  ./node_modules/.bin/electron . --acceptance-test --no-sandbox` → **51/51 steps
-  passed**. New UI steps assert the dashboard renders live counts, per-segment
-  flags + filter + highlight work, and the notes and report-checklist panels open
-  and populate. Real model `ggml-large-v3-turbo-q5_0.bin` + VAD
+  ./node_modules/.bin/electron . --acceptance-test --no-sandbox` → **52/52 steps
+  passed**. UI steps assert the dashboard renders live counts, the workflow
+  stepper renders eight steps, the runtime panel separates available/selected/
+  used, per-segment flags + filter + highlight work, the notes and
+  report-checklist panels open and populate, and the locale preference persists
+  through `preferences.all()`. Real model `ggml-large-v3-turbo-q5_0.bin` + VAD
   `ggml-silero-v5.1.2.bin`.
 
 ### Not verified in this environment (P13)
