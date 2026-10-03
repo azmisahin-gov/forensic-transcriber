@@ -79,10 +79,13 @@
     try {
       state.appInfo = await call(api.app.info());
     } catch (err) {
+      markBootFailed(`app.info failed: ${errText(err)}`);
       toast(`Startup error: ${errText(err)}`, 'error');
       return;
     }
     $('#scope-label').textContent = state.appInfo.scope;
+    const versionEl = $('#app-version');
+    if (versionEl) versionEl.textContent = `v${state.appInfo.version}`;
     updateModelBadge();
     $('#storage-info').textContent =
       `${state.appInfo.storage.cases} cases · ${state.appInfo.storage.evidence} files`;
@@ -93,8 +96,65 @@
     initUpdaterUi();
     await refreshModels();
     await refreshCases();
-    $('#app').setAttribute('aria-hidden', 'false');
+    markBootReady();
   }
+
+  /**
+   * Boot signal read by the packaged startup test (and useful for support).
+   * It records whether the renderer script actually ran to completion, which
+   * dependency globals were defined, and whether the primary controls were
+   * wired to handlers. A crashed renderer leaves this object absent or failed.
+   */
+  function markBootReady() {
+    const requiredGlobals = ['FT_CONSTANTS', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM'];
+    const missingGlobals = requiredGlobals.filter((name) => typeof window[name] === 'undefined');
+    const requiredControls = [
+      'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
+      'btn-first-run-install', 'btn-first-run-models', 'btn-import',
+      'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
+    ];
+    const wired = window.__FT_WIRED_CONTROLS__ || new Set();
+    const controls = {};
+    let unwired = 0;
+    for (const id of requiredControls) {
+      const el = document.getElementById(id);
+      const isWired = Boolean(el) && wired.has(id);
+      controls[id] = { present: Boolean(el), wired: isWired };
+      if (!el || !isWired) unwired += 1;
+    }
+    window.__FT_RENDERER_STATE__ = {
+      booted: true,
+      failed: false,
+      error: null,
+      version: state.appInfo ? state.appInfo.version : null,
+      missingGlobals,
+      controls,
+      unwiredControlCount: unwired,
+      modelReady: Boolean(state.appInfo && state.appInfo.modelReady),
+      at: new Date().toISOString(),
+    };
+    // Reveal the workspace. The booting class hides it visually rather than
+    // using aria-hidden on a container that holds focusable controls, which
+    // browsers block and which is an accessibility anti-pattern for the root.
+    const app = $('#app');
+    if (app) app.classList.remove('booting');
+  }
+
+  function markBootFailed(message) {
+    window.__FT_RENDERER_STATE__ = {
+      booted: false,
+      failed: true,
+      error: String(message),
+      at: new Date().toISOString(),
+    };
+  }
+
+  // A fatal error before init() completes must be observable, not silent.
+  window.addEventListener('error', (event) => {
+    if (!window.__FT_RENDERER_STATE__ || !window.__FT_RENDERER_STATE__.booted) {
+      markBootFailed(event.message || 'uncaught error during startup');
+    }
+  });
 
   // ------------------------------------------------------------------ updates
   // Application auto-update UI. It never downloads or installs on its own; the
@@ -163,6 +223,38 @@
     }
   }
 
+  function renderDiagnostics() {
+    const info = state.appInfo || {};
+    const engine = info.engine || {};
+    const probe = state.engineProbe;
+    const dl = $('#diagnostics-info');
+    if (!dl) return;
+    dl.innerHTML = '';
+    const rows = [
+      ['Application version', info.version || 'unknown'],
+      ['Platform', `${info.platform || ''} ${info.arch || ''}`.trim()],
+      ['Electron / Node', `${info.electron || ''} / ${info.node || ''}`],
+      ['Engine', engine.engine || 'whisper.cpp'],
+      ['Engine version', info.engineVersion || 'unknown'],
+      ['CPU runtime', (probe && probe.cpuBinaryPath) || engine.binaryPath || 'unknown'],
+      ['GPU runtime bundled', probe ? String(Boolean(probe.gpuRuntimeBundled)) : 'not checked'],
+      ['GPU usable', probe ? String(Boolean(probe.gpuUsable)) : 'not checked'],
+      ['FFmpeg / FFprobe', `${Boolean(info.media && info.media.ffmpeg)} / ${Boolean(info.media && info.media.ffprobe)}`],
+      ['Data folder', info.dataDir || ''],
+      ['Models folder', info.modelsDir || ''],
+    ];
+    for (const [k, v] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      wrap.append(dt, dd);
+      dl.appendChild(wrap);
+    }
+    renderEngineStatus(state.engineProbe, state.lastRunMode);
+  }
+
   function renderAbout() {
     const info = state.appInfo || {};
     const dl = $('#about-info');
@@ -205,7 +297,8 @@
    */
   function renderEngineStatus(probe, lastRun) {
     const el = $('#engine-status');
-    if (!el) return;
+    const diag = $('#diagnostics-engine-status');
+    if (!el && !diag) return;
     const parts = [];
     if (!probe) {
       parts.push('Engine capability not checked yet.');
@@ -229,8 +322,10 @@
     if (lastRun) {
       parts.push(lastRun.mode === 'gpu' ? 'Last run: GPU.' : `Last run: CPU (${lastRun.reason || 'fallback'}).`);
     }
-    el.textContent = parts.join(' ');
-    el.className = `engine-status small ${probe && probe.gpuUsable ? 'ok' : 'muted'}`;
+    const text = parts.join(' ');
+    const cls = `engine-status small ${probe && probe.gpuUsable ? 'ok' : 'muted'}`;
+    if (el) { el.textContent = text; el.className = cls; }
+    if (diag) { diag.textContent = text; diag.className = cls; }
   }
 
   async function checkEngine(force = false) {
@@ -906,7 +1001,19 @@
 
   // ---------------------------------------------------------------- interactions
   function wireEvents() {
-    $('#btn-new-case').addEventListener('click', () => {
+    // Record control wiring so the packaged startup test can assert that the
+    // primary buttons actually received a handler. addEventListener does not
+    // leave an inspectable trace, so bind() records it.
+    const wiredControls = new Set();
+    const bind = (selector, event, handler) => {
+      const el = $(selector);
+      if (!el) return null;
+      el.addEventListener(event, handler);
+      wiredControls.add(el.id);
+      return el;
+    };
+    window.__FT_WIRED_CONTROLS__ = wiredControls;
+    bind('#btn-new-case', 'click', () => {
       $('#new-case-title').value = '';
       $('#new-case-notes').value = '';
       $('#dialog-new-case').showModal();
@@ -940,7 +1047,7 @@
       }
     });
 
-    $('#btn-import').addEventListener('click', async () => {
+    bind('#btn-import', 'click', async () => {
       try {
         const paths = await call(api.dialog.openFiles());
         await importPaths(paths);
@@ -970,14 +1077,14 @@
       importPaths(paths);
     });
 
-    $('#btn-transcribe').addEventListener('click', startTranscription);
-    $('#btn-check-engine').addEventListener('click', async () => {
+    bind('#btn-transcribe', 'click', startTranscription);
+    bind('#btn-check-engine', 'click', async () => {
       toast('Checking engine capability…');
       await checkEngine(true);
     });
     $('#btn-cancel').addEventListener('click', cancelTranscription);
-    $('#btn-save').addEventListener('click', saveTranscript);
-    $('#btn-export').addEventListener('click', openExportDialog);
+    bind('#btn-save', 'click', saveTranscript);
+    bind('#btn-export', 'click', openExportDialog);
     $('#btn-run-export').addEventListener('click', (e) => {
       e.preventDefault();
       $('#dialog-export').close();
@@ -1000,8 +1107,12 @@
     $('#btn-undo').addEventListener('click', () => state.store && state.store.undo());
     $('#btn-redo').addEventListener('click', () => state.store && state.store.redo());
 
-    $('#btn-models').addEventListener('click', () => $('#dialog-models').showModal());
-    $('#btn-about').addEventListener('click', () => {
+    bind('#btn-models', 'click', () => $('#dialog-models').showModal());
+    bind('#btn-diagnostics', 'click', () => {
+      renderDiagnostics();
+      $('#dialog-diagnostics').showModal();
+    });
+    bind('#btn-about', 'click', () => {
       renderAbout();
       $('#dialog-about').showModal();
     });
@@ -1009,7 +1120,7 @@
       renderAbout();
       $('#dialog-about').showModal();
     });
-    $('#btn-update-check').addEventListener('click', async () => {
+    bind('#btn-update-check', 'click', async () => {
       try {
         await call(api.updates.check());
       } catch (err) {
@@ -1047,8 +1158,8 @@
     $('#btn-update-release-notes').addEventListener('click', () => {
       window.open('https://github.com/azmisahin-gov/forensic-transcriber/releases', '_blank', 'noopener');
     });
-    $('#btn-first-run-models').addEventListener('click', () => $('#dialog-models').showModal());
-    $('#btn-first-run-install').addEventListener('click', async (e) => {
+    bind('#btn-first-run-models', 'click', () => $('#dialog-models').showModal());
+    bind('#btn-first-run-install', 'click', async (e) => {
       const btn = e.currentTarget;
       const recommended = state.models.find((m) => m.kind === 'asr' && m.recommended);
       if (!recommended) {

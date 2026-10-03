@@ -138,6 +138,11 @@ class Storage {
         end_seconds REAL NOT NULL,
         speaker TEXT NOT NULL DEFAULT 'SPEAKER_01',
         text TEXT NOT NULL DEFAULT '',
+        -- The text as the ASR engine produced it. It is written once when the
+        -- transcript is created and never overwritten, so an expert edit can
+        -- never destroy the automatic output. The text column holds the current
+        -- (possibly edited) text.
+        original_text TEXT,
         status TEXT NOT NULL DEFAULT 'AUTOMATIC',
         confidence REAL,
         words_json TEXT
@@ -156,6 +161,27 @@ class Storage {
       CREATE INDEX IF NOT EXISTS idx_segments_transcript ON segments(transcript_id, ordinal);
       CREATE INDEX IF NOT EXISTS idx_history_case ON history(case_id, history_id);
     `);
+
+    this._migrateSegmentsOriginalText();
+  }
+
+  /**
+   * Schema migration: add segments.original_text to databases created before it
+   * existed. Existing rows get their current text as the original, which is the
+   * best available reconstruction (nothing better was recorded at the time).
+   */
+  _migrateSegmentsOriginalText() {
+    const columns = this.db.prepare('PRAGMA table_info(segments)').all().map((c) => c.name);
+    if (columns.includes('original_text')) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('ALTER TABLE segments ADD COLUMN original_text TEXT');
+      this.db.exec('UPDATE segments SET original_text = text WHERE original_text IS NULL');
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   close() {
@@ -365,6 +391,7 @@ class Storage {
       end: Number(r.end_seconds),
       speaker: r.speaker,
       text: r.text,
+      original_text: r.original_text === null || r.original_text === undefined ? r.text : r.original_text,
       status: r.status,
       confidence: r.confidence === null ? null : Number(r.confidence),
       words: r.words_json ? JSON.parse(r.words_json) : null,
@@ -410,12 +437,30 @@ class Storage {
           .run(language, modelId ?? existing.model_id, engine ?? existing.engine, ts, transcriptId);
       }
 
+      // Preserve the text the engine originally produced. A segment that already
+      // exists keeps its stored original_text; a brand-new segment (the first
+      // transcription, or a manual insert) records the incoming text as the
+      // original. This is what stops an expert edit from destroying the
+      // automatic output, including across save and reopen.
+      // The previous values must be read BEFORE the delete below.
+      const previousOriginal = new Map();
+      if (existing) {
+        for (const row of this.db
+          .prepare('SELECT segment_id, original_text FROM segments WHERE transcript_id = ?')
+          .all(transcriptId)) {
+          previousOriginal.set(row.segment_id, row.original_text);
+        }
+      }
+
       this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
       const insert = this.db.prepare(
-        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, status, confidence, words_json)
-         VALUES(?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
       );
       normalized.forEach((s, i) => {
+        const carried = previousOriginal.has(s.segment_id)
+          ? previousOriginal.get(s.segment_id)
+          : (s.original_text ?? s.text);
         insert.run(
           s.segment_id,
           transcriptId,
@@ -424,6 +469,7 @@ class Storage {
           s.end,
           s.speaker,
           s.text,
+          carried === undefined ? s.text : carried,
           s.status,
           s.confidence,
           s.words ? JSON.stringify(s.words) : null
