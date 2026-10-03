@@ -69,6 +69,11 @@ const api = {
   },
   evidence: {
     importFiles: (caseId, paths) => ipcRenderer.invoke(IPC.EVIDENCE_IMPORT, caseId, paths),
+    onImportProgress: (cb) => {
+      const listener = (_event, payload) => cb(payload);
+      ipcRenderer.on(IPC.EVIDENCE_IMPORT_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(IPC.EVIDENCE_IMPORT_PROGRESS, listener);
+    },
     list: (caseId) => ipcRenderer.invoke(IPC.EVIDENCE_LIST, caseId),
     remove: (evidenceId) => ipcRenderer.invoke(IPC.EVIDENCE_DELETE, evidenceId),
     reveal: (evidenceId) => ipcRenderer.invoke(IPC.EVIDENCE_REVEAL, evidenceId),

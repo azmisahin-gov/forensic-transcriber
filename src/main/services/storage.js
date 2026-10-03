@@ -665,6 +665,10 @@ class Storage {
       caseId
     );
     const missingAssignment = CASE_ASSIGNMENT_FIELDS.filter((f) => !String(kase[f] || '').trim()).length;
+    const report = this.getReport(caseId);
+    const reportHasContent = Boolean(
+      report && (String(report.title || '').trim() || (Array.isArray(report.sections) && report.sections.some((s) => String((s && s.body) || '').trim())))
+    );
     return {
       case_id: caseId,
       title: kase.title,
@@ -684,6 +688,11 @@ class Storage {
            JOIN transcripts t ON t.transcript_id = r.transcript_id WHERE t.case_id = ?`,
         caseId
       ),
+      deliveries: one(
+        `SELECT COUNT(*) AS n FROM history WHERE case_id = ? AND action IN ('DELIVERY_PACKAGE','DELIVERY_CREATED')`,
+        caseId
+      ),
+      has_report: reportHasContent,
       missing_assignment_fields: missingAssignment,
     };
   }

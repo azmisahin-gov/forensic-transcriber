@@ -85,6 +85,7 @@
     CASE_UPDATE: 'case:update',
     CASE_DELETE: 'case:delete',
     EVIDENCE_IMPORT: 'evidence:import',
+    EVIDENCE_IMPORT_PROGRESS: 'evidence:import-progress',
     EVIDENCE_LIST: 'evidence:list',
     EVIDENCE_DELETE: 'evidence:delete',
     EVIDENCE_REVEAL: 'evidence:reveal',

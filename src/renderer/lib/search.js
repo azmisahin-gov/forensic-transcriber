@@ -17,6 +17,8 @@
     UNCLEAR: 'unclear',
     UNREVIEWED: 'unreviewed',
     LOW_CONFIDENCE: 'low-confidence',
+    EDITED: 'edited',
+    VERIFIED: 'verified',
   });
 
   /** True when a segment is marked as an unclear / to-revisit working item. */
@@ -51,6 +53,10 @@
         return segments.filter((s) => isUnreviewed(s));
       case FILTERS.LOW_CONFIDENCE:
         return segments.filter((s) => isLowConfidence(s, threshold));
+      case FILTERS.EDITED:
+        return segments.filter((s) => s.status === 'EDITED');
+      case FILTERS.VERIFIED:
+        return segments.filter((s) => s.status === 'VERIFIED');
       case FILTERS.ALL:
       default:
         return segments.slice();

@@ -477,11 +477,27 @@ function registerIpc() {
     const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
     const imported = [];
     const failures = [];
-    for (const filePath of paths) {
+    const total = paths.length;
+    // Per-file progress from the real import steps (verify → probe → copy →
+    // hash → record). The renderer shows this queue; there is no timer here.
+    const emit = (index, filePath, stage, detail = {}) => {
+      send(IPC.EVIDENCE_IMPORT_PROGRESS, {
+        kind: 'import',
+        index,
+        total,
+        name: path.basename(filePath),
+        stage,
+        ...detail,
+      });
+    };
+    for (let i = 0; i < paths.length; i += 1) {
+      const filePath = paths[i];
       try {
         if (!fs.existsSync(filePath)) throw Object.assign(new Error('File not found.'), { code: 'FILE_NOT_FOUND' });
+        emit(i, filePath, 'verifying');
         let meta = {};
         try {
+          emit(i, filePath, 'inspecting');
           meta = await media.probe(filePath);
         } catch (probeErr) {
           // A file the decoder cannot read is still recorded, with a warning,
@@ -489,10 +505,13 @@ function registerIpc() {
           meta = {};
           failures.push({ path: filePath, error: toErrorPayload(probeErr) });
         }
+        emit(i, filePath, 'copying');
         const ev = await storage.importEvidence(caseId, filePath, meta);
         imported.push({ ...ev, probeWarning: meta.format ? null : 'Metadata could not be read by the decoder.' });
+        emit(i, filePath, 'complete', { evidenceId: ev.evidence_id });
       } catch (err) {
         failures.push({ path: filePath, error: toErrorPayload(err) });
+        emit(i, filePath, 'failed', { error: toErrorPayload(err) });
       }
     }
     return { imported, failures };
@@ -1599,7 +1618,7 @@ async function runAcceptanceTest() {
 
     await uiStep('editing through the UI marks the segment EDITED', `(async () => {
       const seg = document.querySelector('#transcript-list .seg.active');
-      const editBtn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Edit');
+      const editBtn = seg.querySelector('.seg-actions button[data-action="edit"]');
       if (!editBtn) return { __error: 'Edit action not found' };
       editBtn.click();
       await new Promise((r) => setTimeout(r, 200));
@@ -1616,7 +1635,7 @@ async function runAcceptanceTest() {
     await uiStep('speaker can be changed through the UI', `(async () => {
       const before = document.querySelector('#transcript-list .seg.active .speaker').textContent.trim();
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Speaker');
+      const btn = seg.querySelector('.seg-actions button[data-action="speaker"]');
       if (!btn) return { __error: 'Speaker action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 250));
@@ -1627,7 +1646,7 @@ async function runAcceptanceTest() {
     await uiStep('split through the UI adds a segment', `(async () => {
       const before = document.querySelectorAll('#transcript-list .seg').length;
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Split'));
+      const btn = seg.querySelector('.seg-actions button[data-action="split"]');
       if (!btn) return { __error: 'Split action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 300));
@@ -1637,7 +1656,7 @@ async function runAcceptanceTest() {
     await uiStep('merge through the UI removes a segment', `(async () => {
       const before = document.querySelectorAll('#transcript-list .seg').length;
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Merge'));
+      const btn = seg.querySelector('.seg-actions button[data-action="merge"]');
       if (!btn) return { __error: 'Merge action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 300));
@@ -1669,14 +1688,14 @@ async function runAcceptanceTest() {
     await uiStep('case dashboard shows live counts', `(async () => {
       const grid = document.getElementById('dash-grid');
       if (!grid || !grid.querySelector('dd')) return { __error: 'dashboard did not render' };
-      const evidence = [...grid.querySelectorAll('dt')].find((dt) => dt.textContent.trim() === 'Evidence');
-      return Boolean(evidence && Number(evidence.nextElementSibling.textContent) >= 1);
+      const evidence = grid.querySelector('[data-metric="evidence"]');
+      return Boolean(evidence && Number(evidence.textContent) >= 1);
     })()`);
 
     await uiStep('flags filter and search highlight work', `(async () => {
       const seg = document.querySelector('#transcript-list .seg.active');
       if (!seg) return { __error: 'no active segment' };
-      const flagBtn = [...seg.querySelectorAll('.seg-actions button')].find((b) => /^(UNCLEAR|REVISIT|REVIEW)/.test(b.textContent.trim()));
+      const flagBtn = seg.querySelector('.seg-actions button[data-action="flag-UNCLEAR"]');
       if (!flagBtn) return { __error: 'flag action not found' };
       flagBtn.click();
       await new Promise((r) => setTimeout(r, 250));
@@ -1718,6 +1737,41 @@ async function runAcceptanceTest() {
       const ok = items.length > 0 && !items[0].textContent.includes('unavailable');
       dlg.close();
       return ok;
+    })()`);
+
+    // Productization surface: the eight-step workflow and the runtime panel
+    // (available / selected / actually-used) must render from live state.
+    await uiStep('workflow stepper renders eight steps', `(async () => {
+      return document.querySelectorAll('#workflow-list .wf-step').length === 8;
+    })()`);
+
+    await uiStep('runtime panel separates available/selected/used', `(async () => {
+      const chips = [...document.querySelectorAll('#runtime-panel .runtime-chip')];
+      if (chips.length !== 3) return { __error: 'expected 3 runtime chips, got ' + chips.length };
+      const labels = chips.map((c) => c.querySelector('.runtime-chip-label').textContent.trim());
+      return new Set(labels).size === 3;
+    })()`);
+
+    // Language switch: the static markup must follow the selected locale and
+    // the preference must persist through the real IPC surface.
+    await uiStep('language switch re-renders the markup', `(async () => {
+      const sel = document.getElementById('select-locale');
+      const target = document.getElementById('btn-new-case');
+      sel.value = 'en';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 400));
+      const en = target.textContent.trim();
+      sel.value = 'tr';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 400));
+      const tr = target.textContent.trim();
+      if (en === tr) return { __error: 'label did not change with locale' };
+      return document.documentElement.lang === 'tr';
+    })()`);
+
+    await uiStep('locale preference persisted', `(async () => {
+      const res = await window.ft.preferences.all();
+      return Boolean(res && res.ok && res.data && res.data.locale === 'tr');
     })()`);
 
     // No uncaught renderer error may have accumulated during the whole run.
