@@ -5,6 +5,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-03
+
 ### Added
 
 - **P0 reliability and data-integrity hardening.** No new product features; every
