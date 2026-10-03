@@ -230,6 +230,35 @@ lifecycle stage — live, saved, archived, restored, exported — while staying
 dependent only on in-repo infrastructure (no new runtime dependency, no
 network).
 
+## D8f — The public site is Turkish-first and release-derived
+
+**Context.** The GitHub Pages site is the only public description and download
+portal. It previously defaulted to English and hard-coded a release version
+(`0.1.0`), so the download buttons and the quoted version drifted from the
+actual release.
+
+**Decision.**
+
+- The site defaults to **Turkish** (matching the D8d localization default) with
+  an optional English section toggled on the client; the language choice is not
+  persisted to any server.
+- Download links use GitHub's stable `releases/latest/download/<asset>` path, and
+  the release version, release notes and the model-package asset name are read
+  from the public Releases API at load time. No version is hard-coded.
+- The asset names the page links to match exactly what the release workflow
+  publishes (`ForensicTranscriber-Setup-x64.exe`,
+  `ForensicTranscriber-Portable-x64.zip`,
+  `ForensicTranscriber-ModelPack-<version>.zip`, `SHA256SUMS.txt`), so the page
+  cannot silently point at a non-existent file.
+- The site carries the same scope disclaimers as the application (56.12, not
+  56.11; no speaker identification, no legal opinion) and states that it is a
+  static download portal that must never receive case material.
+
+**Why.** A public download page that advertises a stale version or a dead link
+erodes trust in a forensics tool; deriving both from the release itself keeps the
+page correct without a manual edit on every release. A regression test asserts
+the Turkish default and the absence of a hard-coded version.
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,

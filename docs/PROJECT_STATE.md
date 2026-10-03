@@ -1,10 +1,48 @@
 # Project state
 
-CURRENT_PHASE: P14 — professionalization v1 (backend/storage + report/findings/search)
-CURRENT_STATUS: IN PROGRESS — Linux release gate met in this environment; Windows/GPU verification outstanding
+CURRENT_PHASE: P15 — delivery of professionalization v1 (merged + released)
+CURRENT_STATUS: DELIVERED — merged to main and released as v0.3.0; Linux CI/package gates and Windows unit CI passed
 LAST_UPDATED: 2026-10-03
 
-## P14 — professionalization v1 (unreleased)
+## P15 — delivery (merged + released)
+
+The P14 professionalization branch was delivered:
+
+- Branch `professionalization-v1` pushed; PR #20 merged into `main`
+  (merge commit `e491ad5eb3d44a43b1eccf02afb83b711e318717`).
+- Minor release dispatched via the "Release (version)" workflow →
+  version bumped to **0.3.0**, tag `v0.3.0` (commit
+  `3cb9b86dacedc93c2ac6e8c9ae269f8d7fd1cd71`), GitHub Release published with 5
+  assets: Setup x64, Portable x64, ModelPack-0.3.0, `latest.yml`,
+  `SHA256SUMS.txt`.
+- Public site rebuilt: Turkish-first with an optional English section, dynamic
+  release version/notes, and model-package asset resolved from the Releases API
+  (no hard-coded `0.1.0`). Deployed via the Pages workflow.
+
+### Verified for the delivery
+
+- CI on `main@e491ad5` and on `aa102f7` (the site commit): `test` (Linux unit),
+  `test-windows` (**Windows unit**), `package-linux` + packaged smoke test, and
+  `integration` (real whisper.cpp pipeline) all **success**.
+- Release workflow "Release (version)" → **success** (version + build-and-publish:
+  verify-version, build-windows, model-package, publish all success).
+- `v0.3.0` release assets confirmed present via the API; `latest.yml` reports
+  `version: 0.3.0`; `SHA256SUMS.txt` covers all three downloadable artifacts.
+- Pages deployment → **success**; the live site serves `<html lang="tr">` with a
+  hidden English block and resolves the latest tag (`v0.3.0`) via the API.
+- `releases/latest/download/<asset>` returns 302 for Setup, Portable and
+  ModelPack — the stable download links resolve.
+
+### Still not verified
+
+- **Packaged launch on Windows:** the Windows installer/portable were built and
+  published, but no Windows runtime was available here to launch them; the
+  packaged smoke/acceptance gates ran on Linux only → **Windows packaged launch
+  NOT VERIFIED**.
+- **GPU (`GPU capable` / `GPU selected` / `GPU actually used`):** not verified on
+  target NVIDIA hardware (no RTX 3060 here); the published runtime is CPU-only.
+
+## P14 — professionalization v1 (released in v0.3.0)
 
 Scope: harden the backend/storage and add an expert report workspace on top of
 the working v0.2.0 product, without breaking the P12/P13 trust and revision
@@ -43,15 +81,17 @@ Implemented:
 
 ### Verified in this environment (P14)
 
-- `npm test` → 215 tests, 215 pass, 0 fail (all unit + integration suites).
-- `npm run lint` → Lint OK — 66 files.
+- `npm test` (Linux, system FFmpeg 7.1.5 + whisper-cli + real models) →
+  **218 tests, 218 pass, 0 fail, 0 skipped**.
+- `npm run lint` → Lint OK — 67 files.
 - `node scripts/security-check.js` → 0 critical findings.
 - New regression files, all passing against real services (no mocks):
   `tests/unit/v1-professionalization.test.js` (8 tests: report revision
   append/FINAL-lock/restore, findings + source link, FTS5 + LIKE fallback,
   segment paging, dashboard aggregates, archive provenance remap, UYAP hand-off,
-  AI-disabled) and `tests/unit/v1-ui-wiring.test.js` (4 tests: i18n key
-  completeness across locales, new DOM ids, renderer bindings, preload APIs).
+  AI-disabled) and `tests/unit/v1-ui-wiring.test.js` (7 tests: i18n key
+  completeness across locales, new DOM ids, renderer bindings, preload APIs, and
+  the public site — Turkish default, no stale version, dynamic release links).
 - `npm run build:linux` then `node scripts/verify-release.js --skip-package`
   → **9/9 gates passed** (lint, unit, security, SemVer, lockfile, integration,
   packaged smoke, packaged acceptance — 55 steps, engine capability report).
