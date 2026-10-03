@@ -4,10 +4,29 @@ CURRENT_PHASE: P11 — release lifecycle
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
 LAST_UPDATED: 2026-10-03
 
-## First distributable release published: v0.1.2
+## Latest release: v0.1.3
 
-The controlled release lifecycle ran end to end and published a real,
-distributable release that fixes the v0.1.1 renderer blocker.
+| | |
+| --- | --- |
+| Version | **0.1.3** (patch from 0.1.2) |
+| Tag | `v0.1.3` → `86caabb` (tag object) → commit `95414fb` ("Release 0.1.3") |
+| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.3 |
+| Assets | `ForensicTranscriber-Setup-x64.exe` (192 560 570 B), `ForensicTranscriber-Portable-x64.zip` (260 835 791 B), `ForensicTranscriber-ModelPack-0.1.3.zip` (534 060 311 B), `latest.yml` (363 B), `SHA256SUMS.txt` (309 B) |
+| Workflow run | `37104907862` — version, verify-version, build-windows, model-package, publish all **success** |
+
+v0.1.3 fixes the multi-evidence blocker found in the real Windows test: a second
+recording in a case failed with `UNIQUE constraint failed: segments.segment_id`.
+
+Release history:
+
+| Release | State |
+| --- | --- |
+| v0.1.0 | non-distributable (source archives only) |
+| v0.1.1 | shipped a dead renderer |
+| v0.1.2 | failed when a second recording was added to a case |
+| **v0.1.3** | current; use this or newer |
+
+## Earlier release: v0.1.2
 
 | | |
 | --- | --- |
@@ -59,7 +78,7 @@ superseded; it remains published and untouched for the record.
   release and an installed Windows build. The configuration, state machine,
   metadata and safety properties are verified; the live update is not.
 - **GPU runtime is not in this release.** The hosted `windows-latest` runner has
-  no CUDA toolkit, so `v0.1.2` ships the **CPU runtime only**. The application
+  no CUDA toolkit, so `v0.1.3` ships the **CPU runtime only**. The application
   reports CPU mode and the GPU runtime remains unverified.
 - **Not verified on target NVIDIA hardware** (no RTX 3060 available).
 - **The Windows installer was not launched on real Windows hardware**; the
@@ -70,7 +89,7 @@ superseded; it remains published and untouched for the record.
 
 ## Next exact action
 
-Install `ForensicTranscriber-Setup-x64.exe` (v0.1.2) on a real Windows x64
+Install `ForensicTranscriber-Setup-x64.exe` (v0.1.3) on a real Windows x64
 machine, confirm transcription and the **Check engine** report, then publish a
 second release to exercise the live auto-update path.
 

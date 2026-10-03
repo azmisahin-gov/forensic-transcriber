@@ -2,7 +2,7 @@
 
 STATUS: **COMPLETE WITH KNOWN LIMITATIONS**
 
-VERSION: 0.1.2
+VERSION: 0.1.3
 
 COMMIT: see the repository's initial release commit (this document ships with it)
 

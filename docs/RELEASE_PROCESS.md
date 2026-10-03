@@ -32,13 +32,14 @@ maintainer starts "Release (version)" → patch | minor | major
 
 | | |
 | --- | --- |
-| Latest release | **v0.1.2** — https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.2 |
+| Latest release | **v0.1.3** — https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.3 |
 | Assets | installer, portable zip, model package, `latest.yml`, `SHA256SUMS.txt` |
 | GPU runtime | **not included** — the hosted `windows-latest` runner has no CUDA toolkit, so this release ships the CPU runtime only |
 | Code signing | **none** — see [Code-signing status](#code-signing-status) |
 
-`v0.1.0` is an earlier, non-distributable release (source archives only), and
-`v0.1.1` shipped a dead renderer. **Use `v0.1.2` or newer.**
+`v0.1.0` is an earlier, non-distributable release (source archives only),
+`v0.1.1` shipped a dead renderer, and `v0.1.2` failed when a second recording was
+added to a case. **Use `v0.1.3` or newer.**
 
 ## How to create a patch release
 
