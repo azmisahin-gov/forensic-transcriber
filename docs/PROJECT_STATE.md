@@ -1,8 +1,75 @@
 # Project state
 
-CURRENT_PHASE: P13 — 56.12 expert work-station productization
-CURRENT_STATUS: IN PROGRESS — code and tests complete in this environment; packaged/Windows verification outstanding
+CURRENT_PHASE: P14 — professionalization v1 (backend/storage + report/findings/search)
+CURRENT_STATUS: IN PROGRESS — Linux release gate met in this environment; Windows/GPU verification outstanding
 LAST_UPDATED: 2026-10-03
+
+## P14 — professionalization v1 (unreleased)
+
+Scope: harden the backend/storage and add an expert report workspace on top of
+the working v0.2.0 product, without breaking the P12/P13 trust and revision
+invariants and without a new runtime dependency. The offline-first guarantee is
+unchanged.
+
+Implemented:
+
+- **Report revisions (schema_version 6).** New `report_revisions` append-only
+  table; `saveReport()` appends, never silently replaces a `FINAL`
+  (`REPORT_FINAL_LOCKED`), and `setCurrentReportRevision()` restores an earlier
+  snapshot without deleting later ones. `getReport()` exposes the current
+  revision id/state.
+- **Findings.** New `findings` table with an explicit evidence + transcript
+  revision link; CRUD (`createFinding`/`updateFinding`/`deleteFinding`/
+  `listFindings`) with index maintenance.
+- **FTS5 search with fallback.** Guarded `search_index` virtual table;
+  `searchCase()` uses FTS5 `MATCH` with quoted prefix terms joined AND and falls
+  back to a substring scan when FTS5 is unavailable (`this.ftsAvailable`). Index
+  hooks on transcript save, note and finding mutations, and evidence imports.
+- **Segment paging.** `getSegmentPage()` and `getSegmentAt()` for windowed reads
+  of long transcripts.
+- **SQL dashboard.** `caseDashboard()` now derives counts with SQL aggregates
+  (including findings and report revisions).
+- **Archive provenance extension.** Archive v2 also carries notes, findings and
+  report revisions; `restoreNote`/`restoreFinding`/`restoreReport` re-create them
+  with explicit `old id → new id` remapping, including the finding → restored
+  transcript revision link.
+- **UYAP hand-off folder.** `prepareUyapPackage()` writes a local report +
+  transcript hand-off with a manifest recording the transcript revision per file.
+- **Optional local assist (off by default).** `services/assist.js` is a
+  deterministic draft builder over the operator's own records; no model, no
+  network. `status()` reports `language_model: false`, `network: false`.
+- **UI wiring.** Case-header buttons and dialogs for case search, findings,
+  report revisions and the UYAP folder, with tr/en strings and CSS.
+
+### Verified in this environment (P14)
+
+- `npm test` → 215 tests, 215 pass, 0 fail (all unit + integration suites).
+- `npm run lint` → Lint OK — 66 files.
+- `node scripts/security-check.js` → 0 critical findings.
+- New regression files, all passing against real services (no mocks):
+  `tests/unit/v1-professionalization.test.js` (8 tests: report revision
+  append/FINAL-lock/restore, findings + source link, FTS5 + LIKE fallback,
+  segment paging, dashboard aggregates, archive provenance remap, UYAP hand-off,
+  AI-disabled) and `tests/unit/v1-ui-wiring.test.js` (4 tests: i18n key
+  completeness across locales, new DOM ids, renderer bindings, preload APIs).
+- `node scripts/verify-release.js --skip-package` → **9/9 gates passed**
+  (lint, unit, security, SemVer, lockfile, integration, packaged smoke,
+  packaged acceptance — 55 steps, engine capability report). Packaged smoke and
+  acceptance ran on the real `release/linux-unpacked` binary with FFmpeg,
+  `whisper-cli` v1.9.4, `ggml-large-v3-turbo-q5_0.bin` and
+  `ggml-silero-v5.1.2.bin` present. CPU runtime; GPU runtime not bundled.
+
+### Not verified in this environment (P14)
+
+- **Windows build / installer / CI:** not exercised here (no Windows runner
+  available in this session). SQLite migration, atomic file operations and path
+  handling pass the unit suite on Linux; Windows-only depth is **NOT VERIFIED**.
+- **`npm run build:win`:** not run — Windows installer/portable and `latest.yml`
+  are produced by a Windows build → **NOT VERIFIED**.
+- **GPU (`GPU capable` / `GPU selected` / `GPU actually used`):** not verified on
+  target NVIDIA hardware (no RTX 3060 here). The bundled runtime is CPU-only.
+- **Long-recording memory (1/4/8 h):** unchanged from P13 — the waveform path
+  stays O(buckets); no multi-hour recording was measured here.
 
 ## P13 — expert work-station productization (unreleased)
 

@@ -1050,11 +1050,23 @@
       return;
     }
     const atRaw = $('#finding-at').value.trim();
+    // Bind the finding to the transcript revision it was observed against, so a
+    // later machine run cannot silently re-attach it to different text.
+    let revisionId = null;
+    if (state.activeEvidenceId) {
+      try {
+        const revs = await call(api.transcript.revisions(state.caseRecord.case_id, state.activeEvidenceId));
+        revisionId = revs && revs.currentRevision ? revs.currentRevision.revision_id : null;
+      } catch (err) {
+        revisionId = null;
+      }
+    }
     try {
       const finding = await call(api.findings.create(state.caseRecord.case_id, {
         title,
         observation: $('#finding-observation').value.trim(),
         evidenceId: state.activeEvidenceId || null,
+        revisionId,
         atSeconds: atRaw === '' ? null : Number(atRaw),
       }));
       state.findings.push(finding);
