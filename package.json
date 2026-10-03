@@ -1,6 +1,6 @@
 {
   "name": "forensic-transcriber",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local-first transcription workspace for 56.12 audio transcription workflows",
   "author": {
     "name": "Forensic Transcriber Contributors",

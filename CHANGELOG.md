@@ -5,6 +5,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-03
+
 ### Added
 
 - **Report revisions (append-only).** Saving a report appends an immutable
