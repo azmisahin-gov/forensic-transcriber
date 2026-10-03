@@ -7,6 +7,21 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- **The renderer crashed on startup in v0.1.1, leaving the UI completely dead.**
+  `src/renderer/index.html` never loaded `shared/constants.js`, so the browser
+  global `FT_CONSTANTS` was undefined and `transcript-store.js` threw
+  (`Cannot destructure property 'SEGMENT_STATUS'`). The constants script now
+  loads first, and the transcript store fails with an explicit load-order message
+  when it is missing. The packaged smoke test now asserts the renderer actually
+  booted, its dependency globals exist, its primary controls are wired and no
+  uncaught renderer error occurred; the acceptance test now drives the real DOM.
+- **An expert edit destroyed the automatic transcript.** The `segments` table
+  stored only the current text and the renderer cleared undo history on save, so
+  the machine output was lost permanently once an edit was saved. Added
+  `segments.original_text`, written once and never overwritten, carried forward
+  on every save, with a migration that backfills existing databases. The JSON
+  export now includes the automatic text whenever it differs from the current
+  text.
 - **The Windows CUDA build step reported a false success.** It used
   `continue-on-error: true`, so when the runner had no CUDA toolkit the step
   still showed a green tick over a build that never happened. It now skips
@@ -16,6 +31,16 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   produced a malformed release section; consolidated into one.
 - **`js-yaml` was an undeclared direct dependency** of
   `scripts/verify-updater-metadata.js`; now declared explicitly.
+
+### Changed
+
+- **The application version is visible in the top bar and in the About dialog.**
+- **"Check engine" moved out of the transcription panel into About →
+  Diagnostics**, so the transcription workflow shows only what an expert needs.
+- The app root no longer uses `aria-hidden` (browsers block it when the subtree
+  holds focus); it uses a booting class instead. This removes the
+  "Blocked aria-hidden on an element because its descendant retained focus"
+  warning.
 
 ## [0.1.1] - 2026-10-02
 
