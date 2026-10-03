@@ -5,6 +5,38 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **P0 reliability and data-integrity hardening.** No new product features; every
+  change protects case data.
+  - **Case backup / archive** (`Back up case…` / `Restore case…`): a
+    deterministic, versioned archive containing a manifest, the case rows, the
+    original and derived evidence, the transcripts and prior exports. The same
+    case always produces identical bytes. A restore always creates a new case and
+    re-verifies every evidence hash, so a tampered or truncated archive is
+    rejected rather than partially restored. Implemented in-repo with no new
+    dependency.
+  - **Database durability**: `journal_mode=WAL`, `synchronous=FULL`,
+    `foreign_keys=ON`, `busy_timeout=5000`, and a `healthCheck()` running
+    `PRAGMA quick_check`.
+  - **Atomic writes** for exports, the archive and the pre-migration database
+    backup (temp → fsync → rename → directory fsync).
+  - **Crash-safe migration**: a byte-for-byte database backup is taken before any
+    schema rewrite; migrations are idempotent. `schema_version` is now 3.
+  - **Evidence re-verification**: opening a case re-hashes every evidence copy
+    and reports OK / MISMATCH / MISSING; it never rewrites the stored hash.
+  - **Transcription run provenance**: a `transcription_runs` table records, per
+    attempt, the input and derived hashes, engine and version, model and model
+    hash, VAD state, settings, runtime mode/reason and the app version.
+  - **Failed-operation safety**: failed or cancelled transcriptions close their
+    run row and leave other transcripts intact; the restart-to-install-update
+    flow prompts to save or discard unsaved edits.
+  - **Log privacy**: the logger redacts transcript and evidence content and long
+    strings, and collapses the home directory.
+- **Self-test modes bypass the single-instance lock**, so the release gate can
+  run the packaged smoke, acceptance, multi-evidence and engine-report checks
+  without a previous run making the next one exit silently.
+
 ## [0.1.3] - 2026-10-03
 
 ### Fixed
