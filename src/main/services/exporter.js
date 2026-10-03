@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const exporters = require('./exports');
+const { writeFileAtomic } = require('./atomic');
 
 const FORMATS = {
   json: { ext: 'json', render: exporters.toJson, mime: 'application/json' },
@@ -50,7 +51,9 @@ async function runExport({ caseRecord, evidence, transcript, segments, language,
     }
     const content = spec.render(ctx);
     const filePath = path.join(dir, `${stem}.${spec.ext}`);
-    await fs.promises.writeFile(filePath, content, 'utf8');
+    // Atomic write: an interrupted export must not leave a partial file that
+    // looks complete.
+    writeFileAtomic(filePath, content, { fsync: true });
     const stat = fs.statSync(filePath);
     written.push({
       format,

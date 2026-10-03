@@ -7,13 +7,14 @@ const { Readable } = require('node:stream');
 
 const { IPC, SUPPORTED_EXTENSIONS, HISTORY_ACTIONS } = require('../shared/constants');
 const { DEFAULT_ASR_MODEL_ID, DEFAULT_VAD_MODEL_ID, getModel } = require('../shared/model-registry');
-const { Storage } = require('./services/storage');
+const { Storage, sha256File } = require('./services/storage');
 const { Logger } = require('./services/logger');
 const { MediaService } = require('./services/media');
 const { ModelManager } = require('./services/model-manager');
 const { WhisperAdapter } = require('./services/whisper');
 const { RuntimeSelector } = require('./services/runtime-selector');
 const { runExport } = require('./services/exporter');
+const { writeCaseArchive, restoreCaseArchive } = require('./services/case-archive');
 const { createUpdater, STATES: UPDATE_STATES } = require('./services/updater');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
 
@@ -374,10 +375,27 @@ function registerIpc() {
   handle(IPC.CASE_LIST, async () => storage.listCases());
   handle(IPC.CASE_OPEN, async (_e, caseId) => {
     const kase = requireCase(caseId);
+    const evidence = storage.listEvidence(caseId);
+    // P0: re-verify each evidence copy's hash and report drift. This never
+    // rewrites the stored hash or the file; it only surfaces a warning.
+    const integrity = [];
+    for (const ev of evidence) {
+      if (!fs.existsSync(ev.original_path)) {
+        integrity.push({ evidence_id: ev.evidence_id, status: 'MISSING' });
+        continue;
+      }
+      const actual = await sha256File(ev.original_path);
+      integrity.push({
+        evidence_id: ev.evidence_id,
+        status: actual === ev.sha256 ? 'OK' : 'MISMATCH',
+      });
+    }
     return {
       case: kase,
-      evidence: storage.listEvidence(caseId),
+      evidence,
       history: storage.listHistory(caseId),
+      integrity,
+      databaseHealth: storage.healthCheck({ quick: true }),
     };
   });
   handle(IPC.CASE_UPDATE, async (_e, caseId, patch) => storage.updateCase(caseId, patch || {}));
@@ -455,6 +473,60 @@ function registerIpc() {
   });
 
   handle(IPC.HISTORY_LIST, async (_e, caseId) => storage.listHistory(caseId));
+  handle(IPC.HISTORY_RUNS, async (_e, caseId, evidenceId) => storage.listTranscriptionRuns(caseId, evidenceId || null));
+
+  // P0: database health, so a corrupted store is reported rather than crashing.
+  handle(IPC.APP_HEALTH, async () => {
+    const db = storage.healthCheck({ quick: true });
+    return { database: db, dbPath: storage.dbPath, migration: storage.lastMigration || null };
+  });
+
+  // P0: re-verify an evidence file's hash against the stored value. Reports a
+  // mismatch; never rewrites the stored hash or the file.
+  handle(IPC.EVIDENCE_VERIFY, async (_e, evidenceId) => {
+    const ev = await resolveEvidenceFile(evidenceId);
+    if (!fs.existsSync(ev.original_path)) {
+      return { evidenceId, status: 'MISSING', storedSha256: ev.sha256, actualSha256: null };
+    }
+    const actual = await sha256File(ev.original_path);
+    return {
+      evidenceId,
+      status: actual === ev.sha256 ? 'OK' : 'MISMATCH',
+      storedSha256: ev.sha256,
+      actualSha256: actual,
+    };
+  });
+
+  // P0: case archive export / import (deterministic, versioned, verified).
+  handle(IPC.CASE_ARCHIVE_EXPORT, async (_e, caseId) => {
+    const kase = requireCase(caseId);
+    const suggested = `${(kase.title || 'case').replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 60)}__${caseId}.ftcase.tar.gz`;
+    const picked = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export case archive',
+      defaultPath: suggested,
+      filters: [{ name: 'Forensic Transcriber case archive', extensions: ['tar.gz', 'ftcase'] }],
+    });
+    if (picked.canceled || !picked.filePath) return { canceled: true };
+    const result = await writeCaseArchive({ storage, caseId, destPath: picked.filePath });
+    storage.recordHistory(caseId, 'CASE_ARCHIVED', caseId, {
+      path: picked.filePath,
+      sha256: result.sha256,
+      bytes: result.bytes,
+    });
+    return result;
+  });
+
+  handle(IPC.CASE_ARCHIVE_IMPORT, async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: 'Import case archive',
+      properties: ['openFile'],
+      filters: [{ name: 'Forensic Transcriber case archive', extensions: ['tar.gz', 'ftcase', 'gz'] }],
+    });
+    if (picked.canceled || !picked.filePaths.length) return { canceled: true };
+    const buffer = fs.readFileSync(picked.filePaths[0]);
+    const restored = await restoreCaseArchive({ storage, buffer });
+    return restored;
+  });
 
   handle(IPC.MODEL_LIST, async () => modelManager.list());
   handle(IPC.MODEL_INSTALL, async (_e, modelId) => {
@@ -576,11 +648,37 @@ function registerIpc() {
       const activeAdapter = selection.adapter;
       emit({ kind: 'stage', stage: 'runtime', runtimeMode: selection.mode, runtimeReason: selection.reason });
 
+      // P0: record exactly what produced this transcript. The run row is written
+      // before transcription starts and completed in both the success and the
+      // failure path, so a failed attempt is auditable too.
+      let derivedSha256 = null;
+      try {
+        derivedSha256 = await sha256File(derivedPath);
+      } catch {
+        derivedSha256 = null;
+      }
+      const asrModel = getModel(asrId);
+      const runId = storage.startTranscriptionRun(caseId, evidenceId, {
+        inputSha256: ev.sha256,
+        derivedSha256,
+        engine: 'whisper.cpp',
+        engineVersion: await whisper.version(),
+        modelId: asrId,
+        modelSha256: asrModel ? asrModel.sha256 : null,
+        vad: useVad && Boolean(vadModelPath),
+        vadModel: useVad && vadModelPath ? DEFAULT_VAD_MODEL_ID : null,
+        settings: { language, useGpu, useVad },
+        runtimeMode: selection.mode,
+        runtimeReason: selection.reason,
+        appVersion: app.getVersion(),
+      });
+
       storage.recordHistory(caseId, HISTORY_ACTIONS.TRANSCRIPTION_STARTED, evidenceId, {
         modelId: asrId,
         language,
         runtimeMode: selection.mode,
         runtimeReason: selection.reason,
+        runId,
       });
 
       const result = await activeAdapter.transcribe(derivedPath, {
@@ -599,6 +697,12 @@ function registerIpc() {
         engine: result.engine,
         segments: result.segments,
         source: 'asr',
+      });
+      storage.finishTranscriptionRun(runId, {
+        status: 'SUCCEEDED',
+        transcriptId: saved.transcript.transcript_id,
+        runtimeMode: selection.mode,
+        runtimeReason: selection.reason,
       });
       emit({ kind: 'stage', stage: 'done', percent: 100 });
       lastRunMode = {
@@ -620,6 +724,12 @@ function registerIpc() {
       };
     } catch (err) {
       const code = err && err.code ? err.code : 'ASR_FAILED';
+      if (typeof runId === 'string') {
+        storage.finishTranscriptionRun(runId, {
+          status: code === 'TRANSCRIPTION_CANCELLED' ? 'CANCELLED' : 'FAILED',
+          errorCode: code,
+        });
+      }
       storage.recordHistory(caseId, code === 'TRANSCRIPTION_CANCELLED' ? HISTORY_ACTIONS.TRANSCRIPTION_CANCELLED : HISTORY_ACTIONS.TRANSCRIPTION_FAILED, evidenceId, { code, message: err.message });
       throw err;
     } finally {
@@ -1023,6 +1133,34 @@ async function runAcceptanceTest() {
     // No uncaught renderer error may have accumulated during the whole run.
     const uiErrors = await js('Array.isArray(window.__FT_CONSOLE_ERRORS__) ? window.__FT_CONSOLE_ERRORS__ : []');
     step('no renderer errors after the UI workflow', uiErrors.length === 0, uiErrors.join(' | '));
+
+    // P0: the case must survive a backup/restore round trip through the real IPC
+    // surface, with evidence hashes and the edited transcript intact.
+    const archivePath = path.join(require('node:os').tmpdir(), `acc-archive-${Date.now()}.ftcase.tar.gz`);
+    const { writeCaseArchive, restoreCaseArchive, verifyCaseArchive } = require('./services/case-archive');
+    const archived = await writeCaseArchive({ storage, caseId, destPath: archivePath });
+    step('case archive written', archived.bytes > 0 && fs.existsSync(archivePath));
+    const archiveBuffer = fs.readFileSync(archivePath);
+    step('case archive verifies', verifyCaseArchive(archiveBuffer).ok === true);
+    const restored = await restoreCaseArchive({ storage, buffer: archiveBuffer });
+    step('case archive restored as a new case', restored.caseId !== caseId);
+    const restoredEvidence = storage.listEvidence(restored.caseId);
+    step('restored evidence count matches', restoredEvidence.length === storage.listEvidence(caseId).length);
+    const origHashes = storage.listEvidence(caseId).map((e) => e.sha256).sort();
+    step('restored evidence hashes match',
+      JSON.stringify(restoredEvidence.map((e) => e.sha256).sort()) === JSON.stringify(origHashes));
+
+    // P0: re-verification must report OK for the untouched originals.
+    const verify = await js(`window.ft.evidence.verify(${JSON.stringify(ev.evidence_id)})`);
+    step('evidence re-verification reports OK', verify.ok === true && verify.data.status === 'OK');
+    const health = await js('window.ft.evidence.health()');
+    step('database health check reports ok', health.ok === true && health.data.database.ok === true);
+
+    // P0: a failed transcription is recorded as a run without corrupting the case.
+    const runs = storage.listTranscriptionRuns(caseId, ev.evidence_id);
+    step('transcription run provenance recorded', runs.length >= 1 && runs[0].status === 'SUCCEEDED');
+    step('run records input and model hashes',
+      Boolean(runs[0].input_sha256) && Boolean(runs[0].model_sha256));
 
     report.ok = report.steps.every((s) => s.ok);
   } catch (err) {

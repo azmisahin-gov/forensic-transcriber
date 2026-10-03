@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { copyFileAtomic, writeFileAtomic } = require('./atomic');
 const {
   HISTORY_ACTIONS,
   SEGMENT_STATUS,
@@ -11,7 +12,7 @@ const {
   UNCLEAR_PLACEHOLDER,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function nowIso() {
   return new Date().toISOString();
@@ -73,9 +74,44 @@ class Storage {
     fs.mkdirSync(this.casesDir, { recursive: true });
     this.dbPath = path.join(baseDir, 'forensic-transcriber.db');
     this.db = new DatabaseSync(this.dbPath);
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec('PRAGMA foreign_keys = ON;');
+    this._configure();
     this._migrate();
+  }
+
+  /**
+   * Durability and concurrency pragmas.
+   *
+   * - `journal_mode = WAL` keeps readers from blocking the writer and survives a
+   *   crash without corrupting the database.
+   * - `synchronous = FULL` makes a commit durable on disk before it returns, so a
+   *   power loss cannot lose an acknowledged write. The extra fsync per commit is
+   *   negligible for this workload (a handful of saves per transcription) and is
+   *   the correct trade-off for case data.
+   * - `busy_timeout` waits instead of failing when another connection holds the
+   *   lock, which matters if a second window or a tool ever opens the file.
+   * - `foreign_keys = ON` keeps the cascade deletes honest.
+   */
+  _configure() {
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA synchronous = FULL;');
+    this.db.exec('PRAGMA foreign_keys = ON;');
+    this.db.exec('PRAGMA busy_timeout = 5000;');
+    this.db.exec('PRAGMA wal_autocheckpoint = 1000;');
+  }
+
+  /**
+   * Run SQLite's own integrity check. Returns a structured result rather than
+   * throwing, so callers can warn without crashing the application.
+   */
+  healthCheck({ quick = true } = {}) {
+    try {
+      const rows = this.db.prepare(quick ? 'PRAGMA quick_check' : 'PRAGMA integrity_check').all();
+      const messages = rows.map((r) => Object.values(r)[0]).filter(Boolean);
+      const ok = messages.length === 1 && messages[0] === 'ok';
+      return { ok, messages };
+    } catch (err) {
+      return { ok: false, messages: [err.message] };
+    }
   }
 
   _migrate() {
@@ -86,10 +122,49 @@ class Storage {
       );
     `);
     const current = this.db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get();
-    if (!current) {
-      this.db.prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)`).run(String(SCHEMA_VERSION));
+    const stored = current ? Number(current.value) : 0;
+    const needsMigration = stored !== SCHEMA_VERSION;
+
+    // Back up the database before any migration that could rewrite it, so a
+    // crash or a bug mid-migration can never destroy the only copy. The backup
+    // is a byte-for-byte copy of the database file taken after a WAL checkpoint.
+    let backupPath = null;
+    if (needsMigration && this._databaseHasUserData()) {
+      backupPath = `${this.dbPath}.pre-migration-v${stored}-${Date.now()}.bak`;
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+        copyFileAtomic(this.dbPath, backupPath);
+      } catch {
+        // If the backup cannot be written we still migrate; the migrations are
+        // transactional, but the missing backup is worth knowing about.
+        backupPath = null;
+      }
     }
 
+    this._createSchema();
+
+    this._migrateSegmentsOriginalText();
+    this._migrateSegmentsCompositeKey();
+    this.db
+      .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(String(SCHEMA_VERSION));
+    this.lastMigration = { from: stored, to: SCHEMA_VERSION, backupPath };
+  }
+
+  /** True when the database already holds user data worth backing up. */
+  _databaseHasUserData() {
+    try {
+      const row = this.db.prepare('SELECT COUNT(*) AS n FROM cases').get();
+      return Number(row.n) > 0;
+    } catch {
+      // The cases table may not exist yet on a brand-new database.
+      return false;
+    }
+  }
+
+  /** Create the tables, indexes and history table if they do not exist. */
+  _createSchema() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS cases (
         case_id TEXT PRIMARY KEY,
@@ -165,6 +240,34 @@ class Storage {
       CREATE INDEX IF NOT EXISTS idx_evidence_case ON evidence(case_id);
       CREATE INDEX IF NOT EXISTS idx_segments_transcript ON segments(transcript_id, ordinal);
       CREATE INDEX IF NOT EXISTS idx_history_case ON history(case_id, history_id);
+
+      -- One row per transcription attempt (success or failure). It records the
+      -- exact inputs and settings used, so a later reviewer can see how a
+      -- transcript was produced and with which model and runtime.
+      CREATE TABLE IF NOT EXISTS transcription_runs (
+        run_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+        transcript_id TEXT,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        input_sha256 TEXT,
+        derived_sha256 TEXT,
+        engine TEXT,
+        engine_version TEXT,
+        model_id TEXT,
+        model_sha256 TEXT,
+        vad INTEGER,
+        vad_model TEXT,
+        settings_json TEXT,
+        runtime_mode TEXT,
+        runtime_reason TEXT,
+        app_version TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_runs_case ON transcription_runs(case_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_runs_evidence ON transcription_runs(evidence_id, started_at);
     `);
 
     this._migrateSegmentsOriginalText();
@@ -565,6 +668,67 @@ class Storage {
     return { transcript: this.getTranscript(caseId, evidenceId), segments: this.getSegments(transcriptId) };
   }
 
+  /**
+   * Record the start of a transcription attempt. Returns a run id the caller
+   * uses to complete the record.
+   */
+  startTranscriptionRun(caseId, evidenceId, info = {}) {
+    const runId = makeId('RUN');
+    this.db
+      .prepare(
+        `INSERT INTO transcription_runs(
+           run_id, case_id, evidence_id, transcript_id, status, input_sha256, derived_sha256,
+           engine, engine_version, model_id, model_sha256, vad, vad_model, settings_json,
+           runtime_mode, runtime_reason, app_version, started_at
+         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        runId,
+        caseId,
+        evidenceId,
+        info.transcriptId ?? null,
+        'STARTED',
+        info.inputSha256 ?? null,
+        info.derivedSha256 ?? null,
+        info.engine ?? null,
+        info.engineVersion ?? null,
+        info.modelId ?? null,
+        info.modelSha256 ?? null,
+        info.vad === undefined || info.vad === null ? null : (info.vad ? 1 : 0),
+        info.vadModel ?? null,
+        info.settings ? JSON.stringify(info.settings) : null,
+        info.runtimeMode ?? null,
+        info.runtimeReason ?? null,
+        info.appVersion ?? null,
+        nowIso()
+      );
+    return runId;
+  }
+
+  /** Complete a transcription run (success or failure). */
+  finishTranscriptionRun(runId, { status, errorCode = null, transcriptId = null, runtimeMode = null, runtimeReason = null } = {}) {
+    this.db
+      .prepare(
+        `UPDATE transcription_runs
+           SET status = ?, error_code = ?, transcript_id = COALESCE(?, transcript_id),
+               runtime_mode = COALESCE(?, runtime_mode), runtime_reason = COALESCE(?, runtime_reason),
+               finished_at = ?
+         WHERE run_id = ?`
+      )
+      .run(status, errorCode, transcriptId, runtimeMode, runtimeReason, nowIso(), runId);
+  }
+
+  listTranscriptionRuns(caseId, evidenceId = null) {
+    const rows = evidenceId
+      ? this.db.prepare('SELECT * FROM transcription_runs WHERE case_id = ? AND evidence_id = ? ORDER BY started_at DESC').all(caseId, evidenceId)
+      : this.db.prepare('SELECT * FROM transcription_runs WHERE case_id = ? ORDER BY started_at DESC').all(caseId);
+    return rows.map((r) => ({
+      ...r,
+      vad: r.vad === null ? null : Boolean(r.vad),
+      settings: r.settings_json ? JSON.parse(r.settings_json) : null,
+    }));
+  }
+
   listHistory(caseId) {
     const rows = this.db
       .prepare('SELECT * FROM history WHERE case_id = ? ORDER BY history_id DESC LIMIT 1000')
@@ -626,6 +790,10 @@ function normalizeSegments(segments) {
       end,
       speaker: typeof raw.speaker === 'string' && raw.speaker ? raw.speaker : 'SPEAKER_01',
       text,
+      // Carried through so a caller restoring an archive can preserve the
+      // original machine text. The save path still prefers the value already
+      // stored for an existing segment.
+      original_text: typeof raw.original_text === 'string' ? raw.original_text : undefined,
       status,
       confidence: raw.confidence === null || raw.confidence === undefined ? null : Number(raw.confidence),
       words: Array.isArray(raw.words) ? raw.words : null,

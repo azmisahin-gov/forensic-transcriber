@@ -112,7 +112,7 @@
       'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
       'btn-first-run-install', 'btn-first-run-models', 'btn-import',
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
-      'btn-open-exports', 'btn-open-datadir',
+      'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -515,8 +515,52 @@
       renderCaseList();
       $('#btn-save').disabled = true;
       $('#btn-export').disabled = true;
+      reportIntegrity(data.integrity, data.databaseHealth);
     } catch (err) {
       toast(`Could not open case: ${errText(err)}`, 'error');
+    }
+  }
+
+  /**
+   * P0: surface evidence or database integrity drift. This is a warning only —
+   * the app never silently re-hashes an evidence file or edits the database.
+   */
+  function reportIntegrity(integrity, databaseHealth) {
+    if (databaseHealth && databaseHealth.ok === false) {
+      toast('The local database reported an integrity problem. Back up this case before continuing.', 'error');
+    }
+    if (!Array.isArray(integrity)) return;
+    const bad = integrity.filter((i) => i.status !== 'OK');
+    if (!bad.length) return;
+    const names = bad
+      .map((b) => {
+        const ev = state.evidence.find((e) => e.evidence_id === b.evidence_id);
+        return `${ev ? ev.original_name : b.evidence_id} (${b.status})`;
+      })
+      .join(', ');
+    toast(`Evidence integrity warning: ${names}. Re-import the original if needed.`, 'error');
+  }
+
+  async function backUpCase() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.cases.archiveExport(state.caseRecord.case_id));
+      if (res && res.canceled) return;
+      toast(`Case backed up (${res.bytes} bytes). ${res.sha256.slice(0, 16)}…`, 'success');
+    } catch (err) {
+      toast(`Backup failed: ${errText(err)}`, 'error');
+    }
+  }
+
+  async function restoreCase() {
+    try {
+      const res = await call(api.cases.archiveImport());
+      if (res && res.canceled) return;
+      await refreshCases();
+      toast('Case restored as a new case.', 'success');
+      await openCase(res.caseId);
+    } catch (err) {
+      toast(`Restore failed: ${errText(err)}`, 'error');
     }
   }
 
@@ -1115,6 +1159,8 @@
     $('#btn-cancel').addEventListener('click', cancelTranscription);
     bind('#btn-save', 'click', saveTranscript);
     bind('#btn-export', 'click', openExportDialog);
+    bind('#btn-archive-export', 'click', backUpCase);
+    bind('#btn-archive-import', 'click', restoreCase);
     bind('#btn-open-exports', 'click', (e) => {
       e.preventDefault();
       openExportsFolder();
@@ -1176,7 +1222,28 @@
         toast(`Could not postpone: ${errText(err)}`, 'error');
       }
     });
-    $('#btn-update-install').addEventListener('click', async () => {
+    bind('#btn-update-install', 'click', async () => {
+      // P0: never restart out from under unsaved work. Offer to save first, and
+      // let the user decline the update if they are not ready.
+      if (state.store && state.store.dirty) {
+        const save = await confirmDialog(
+          'Unsaved transcript changes',
+          'This case has unsaved transcript edits. Save them before restarting to install the update?'
+        );
+        if (save) {
+          await saveTranscript();
+          if (state.store && state.store.dirty) {
+            toast('Could not save; the update was not started.', 'error');
+            return;
+          }
+        } else {
+          const proceed = await confirmDialog(
+            'Discard unsaved changes?',
+            'Restarting now will discard unsaved transcript edits. Continue?'
+          );
+          if (!proceed) return;
+        }
+      }
       const ok = await confirmDialog(
         'Restart and install?',
         'The application will close and restart into the new version. Your case data and speech model are not affected.'
