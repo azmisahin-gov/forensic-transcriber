@@ -5,6 +5,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-03
+
 ### Fixed
 
 - **A second recording in the same case failed with
