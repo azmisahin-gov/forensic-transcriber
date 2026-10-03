@@ -472,6 +472,21 @@ function registerIpc() {
     return storage.saveTranscript(caseId, evidenceId, payload || {});
   });
 
+  handle(IPC.TRANSCRIPT_REVISIONS, async (_e, caseId, evidenceId) => {
+    requireCase(caseId);
+    const transcript = storage.getTranscript(caseId, evidenceId);
+    if (!transcript) return { transcript: null, revisions: [], currentRevision: null };
+    return {
+      transcript,
+      revisions: storage.listRevisions(transcript.transcript_id),
+      currentRevision: storage.getCurrentRevisionInfo(transcript.transcript_id),
+    };
+  });
+
+  // Explicitly promote a stored revision to current. This is the operator's way
+  // to accept a newer machine revision, or to restore an earlier human one.
+  handle(IPC.TRANSCRIPT_SET_REVISION, async (_e, revisionId) => storage.setCurrentRevision(revisionId));
+
   handle(IPC.HISTORY_LIST, async (_e, caseId) => storage.listHistory(caseId));
   handle(IPC.HISTORY_RUNS, async (_e, caseId, evidenceId) => storage.listTranscriptionRuns(caseId, evidenceId || null));
 
@@ -577,12 +592,19 @@ function registerIpc() {
     const transcript = storage.getTranscript(caseId, evidenceId);
     if (!transcript) throw Object.assign(new Error('No transcript to export.'), { code: 'TRANSCRIPT_MISSING' });
     const segments = storage.getSegments(transcript.transcript_id);
+    // Record exactly which revision the export was rendered from, so a later
+    // reader can tell which snapshot of the work the file represents.
+    const currentRevision = storage.getCurrentRevisionInfo(transcript.transcript_id);
+    const revisionRef = currentRevision
+      ? { revision_id: currentRevision.revision_id, state: currentRevision.state, created_at: currentRevision.created_at, run_id: currentRevision.run_id ?? null }
+      : null;
     const formats = Array.isArray(options && options.formats) ? options.formats : ['json', 'txt', 'srt', 'html'];
     const written = await runExport({
       caseRecord: kase,
       evidence: ev,
       transcript,
       segments,
+      revision: revisionRef,
       language: transcript.language,
       modelId: transcript.model_id,
       engine: transcript.engine,
@@ -592,6 +614,7 @@ function registerIpc() {
     });
     storage.recordHistory(caseId, HISTORY_ACTIONS.EXPORT_CREATED, evidenceId, {
       formats,
+      revisionId: revisionRef ? revisionRef.revision_id : null,
       files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
     });
     return written;
@@ -623,6 +646,30 @@ function registerIpc() {
     jobs.set(event.sender.id, { controller });
 
     const emit = (payload) => send(IPC.TRANSCRIBE_PROGRESS, payload);
+    // Declared outside the try so the catch can always close a run that was
+    // opened. The previous in-try `const` put `runId` in the temporal dead zone
+    // for the catch block, so a failure before/after the run was created raised a
+    // second ReferenceError and masked the real error.
+    let runId = null;
+    // Completing a run must never throw into the caller: a secondary error here
+    // would replace the original failure. Return the outcome instead.
+    const finishRun = (status, extra = {}) => {
+      if (typeof runId !== 'string') return false;
+      try {
+        storage.finishTranscriptionRun(runId, { status, ...extra });
+        return true;
+      } catch (finishErr) {
+        if (logger) logger.error('failed to close transcription run', toErrorPayload(finishErr));
+        return false;
+      }
+    };
+    const recordSafe = (action, detail) => {
+      try {
+        storage.recordHistory(caseId, action, evidenceId, detail);
+      } catch (historyErr) {
+        if (logger) logger.error('failed to record transcription history', toErrorPayload(historyErr));
+      }
+    };
     try {
       emit({ kind: 'stage', stage: 'preparing', percent: 2 });
 
@@ -658,7 +705,7 @@ function registerIpc() {
         derivedSha256 = null;
       }
       const asrModel = getModel(asrId);
-      const runId = storage.startTranscriptionRun(caseId, evidenceId, {
+      runId = storage.startTranscriptionRun(caseId, evidenceId, {
         inputSha256: ev.sha256,
         derivedSha256,
         engine: 'whisper.cpp',
@@ -697,9 +744,9 @@ function registerIpc() {
         engine: result.engine,
         segments: result.segments,
         source: 'asr',
+        runId,
       });
-      storage.finishTranscriptionRun(runId, {
-        status: 'SUCCEEDED',
+      finishRun('SUCCEEDED', {
         transcriptId: saved.transcript.transcript_id,
         runtimeMode: selection.mode,
         runtimeReason: selection.reason,
@@ -718,19 +765,20 @@ function registerIpc() {
       return {
         transcript: saved.transcript,
         segments: saved.segments,
+        revision: saved.revision,
+        currentRevision: saved.currentRevision,
+        revisionBecameCurrent: saved.revisionBecameCurrent,
         meta: result.raw,
         runtime: result.runtime || null,
         runtimeSelection: { mode: selection.mode, reason: selection.reason, gpuRuntimeBundled: selection.gpuRuntimeBundled },
       };
     } catch (err) {
       const code = err && err.code ? err.code : 'ASR_FAILED';
-      if (typeof runId === 'string') {
-        storage.finishTranscriptionRun(runId, {
-          status: code === 'TRANSCRIPTION_CANCELLED' ? 'CANCELLED' : 'FAILED',
-          errorCode: code,
-        });
-      }
-      storage.recordHistory(caseId, code === 'TRANSCRIPTION_CANCELLED' ? HISTORY_ACTIONS.TRANSCRIPTION_CANCELLED : HISTORY_ACTIONS.TRANSCRIPTION_FAILED, evidenceId, { code, message: err.message });
+      // Always close the run. The success path may have thrown after the run was
+      // completed (for example in the return-value assembly); finishing an
+      // already-finished run is harmless.
+      finishRun(code === 'TRANSCRIPTION_CANCELLED' ? 'CANCELLED' : 'FAILED', { errorCode: code });
+      recordSafe(code === 'TRANSCRIPTION_CANCELLED' ? HISTORY_ACTIONS.TRANSCRIPTION_CANCELLED : HISTORY_ACTIONS.TRANSCRIPTION_FAILED, { code, message: err.message });
       throw err;
     } finally {
       jobs.delete(event.sender.id);
@@ -1024,6 +1072,32 @@ async function runAcceptanceTest() {
     const jsonPath = exported.data.find((f) => f.format === 'json').path;
     const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     step('export json matches stored transcript', json.segments.length === reloadedSegments.length);
+    step('export records the transcript revision', Boolean(json.transcript_revision && json.transcript_revision.revision_id));
+
+    // ---- P0: safe re-transcription ----------------------------------------
+    // A second ASR run over the same evidence must not silently overwrite the
+    // reviewed/edited work from the first run.
+    const retranscribed = await js(
+      `window.ft.transcribe.start({ caseId: ${JSON.stringify(caseId)}, evidenceId: ${JSON.stringify(ev.evidence_id)}, modelId: ${JSON.stringify(modelId)}, language: 'tr', useGpu: false, useVad: false })`
+    );
+    step('re-transcription completes', retranscribed.ok === true);
+    step('re-transcription keeps the human revision current', retranscribed.data.revisionBecameCurrent === false);
+    const revisionsRes = await js(
+      `window.ft.transcript.revisions(${JSON.stringify(caseId)}, ${JSON.stringify(ev.evidence_id)})`
+    );
+    step('both transcript revisions are stored', revisionsRes.ok === true && revisionsRes.data.revisions.length >= 2);
+    const currentAfter = await js(
+      `window.ft.transcript.get(${JSON.stringify(caseId)}, ${JSON.stringify(ev.evidence_id)})`
+    );
+    step(
+      'human edit still present after the new run',
+      currentAfter.ok === true && currentAfter.data.segments[0].text === 'Düzenlenmiş metin'
+    );
+
+    // ---- P0: run lifecycle ------------------------------------------------
+    const allRuns = storage.listTranscriptionRuns(caseId, ev.evidence_id);
+    step('no orphan STARTED run remains', allRuns.every((r) => r.status !== 'STARTED'));
+    step('every run is terminal with a finish time', allRuns.every((r) => r.finished_at && ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(r.status)));
 
     // ---- UI-driven verification -------------------------------------------
     // Everything above went through the IPC surface. These steps drive the real
