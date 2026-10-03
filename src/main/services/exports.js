@@ -72,6 +72,12 @@ function toJson({ caseRecord, evidence, transcript, segments, language, modelId,
         end: s.end,
         speaker: s.speaker,
         text: s.text,
+        // The automatic (machine) text is exported alongside the current text
+        // whenever it differs, so an edited segment never hides what the engine
+        // originally produced.
+        original_text: s.original_text !== undefined && s.original_text !== null && s.original_text !== s.text
+          ? s.original_text
+          : undefined,
         status: s.status,
         confidence: s.confidence ?? null,
         words: s.words ?? undefined,

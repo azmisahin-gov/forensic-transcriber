@@ -273,6 +273,9 @@
         end: s.end,
         speaker: s.speaker,
         text: s.text,
+        // Carried through so the stored automatic text is never overwritten by
+        // an edit. The main process preserves the existing value regardless.
+        original_text: s.original_text ?? s.text,
         status: s.status,
         confidence: s.confidence ?? null,
         words: s.words ?? null,
