@@ -195,6 +195,7 @@ class Storage {
 
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
+    this._migrateSegmentsFlags();
     this._migrateEvidenceAudioStreamCount();
     this._migrateCaseAssignment();
     this.db
@@ -281,6 +282,10 @@ class Storage {
         status TEXT NOT NULL DEFAULT 'AUTOMATIC',
         confidence REAL,
         words_json TEXT,
+        -- Operator working flags on a segment (e.g. UNCLEAR, REVISIT, REVIEW).
+        -- These are local review state, never a legal finding, and are kept
+        -- separate from the status column so they survive a save/reopen.
+        flags_json TEXT,
         PRIMARY KEY (transcript_id, segment_id)
       );
 
@@ -393,6 +398,7 @@ class Storage {
 
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
+    this._migrateSegmentsFlags();
     this._migrateEvidenceAudioStreamCount();
     this._migrateCaseAssignment();
     this.db
@@ -476,6 +482,7 @@ class Storage {
           status TEXT NOT NULL DEFAULT 'AUTOMATIC',
           confidence REAL,
           words_json TEXT,
+          flags_json TEXT,
           PRIMARY KEY (transcript_id, segment_id)
         );
         INSERT INTO segments_v2 (
@@ -511,6 +518,23 @@ class Storage {
     try {
       this.db.exec('ALTER TABLE segments ADD COLUMN original_text TEXT');
       this.db.exec('UPDATE segments SET original_text = text WHERE original_text IS NULL');
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Schema migration: add segments.flags_json for operator working flags
+   * (unclear / revisit / review). Existing rows get NULL (no flags).
+   */
+  _migrateSegmentsFlags() {
+    const columns = this.db.prepare('PRAGMA table_info(segments)').all().map((c) => c.name);
+    if (columns.includes('flags_json')) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('ALTER TABLE segments ADD COLUMN flags_json TEXT');
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -815,7 +839,22 @@ class Storage {
       status: r.status,
       confidence: r.confidence === null ? null : Number(r.confidence),
       words: r.words_json ? JSON.parse(r.words_json) : null,
+      flags: r.flags_json ? JSON.parse(r.flags_json) : [],
     }));
+  }
+
+  /**
+   * Set or clear the operator working flags on a single segment. Flags are
+   * local review state (unclear / revisit / review). They are stored on the
+   * current transcript row; the caller re-saves the transcript so flags travel
+   * with the revision. Kept tiny on purpose — this is not a status change.
+   */
+  setSegmentFlags(transcriptId, segmentId, flags) {
+    const list = Array.isArray(flags) ? flags.filter((f) => typeof f === 'string' && f) : [];
+    const info = this.db
+      .prepare('UPDATE segments SET flags_json = ? WHERE transcript_id = ? AND segment_id = ?')
+      .run(list.length ? JSON.stringify(list) : null, transcriptId, segmentId);
+    return info.changes > 0;
   }
 
   /**
@@ -915,8 +954,8 @@ class Storage {
       if (makeCurrent) {
         this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
         const insert = this.db.prepare(
-          `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+          `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json, flags_json)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
         );
         revisionSegments.forEach((s, i) => {
           insert.run(
@@ -930,7 +969,8 @@ class Storage {
             s.original_text,
             s.status,
             s.confidence,
-            s.words ? JSON.stringify(s.words) : null
+            s.words ? JSON.stringify(s.words) : null,
+            s.flags && s.flags.length ? JSON.stringify(s.flags) : null
           );
         });
       }
@@ -1038,8 +1078,8 @@ class Storage {
       this.db.prepare('UPDATE transcript_revisions SET is_current = 1 WHERE revision_id = ?').run(revisionId);
       this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
       const insert = this.db.prepare(
-        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json, flags_json)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
       );
       segments.forEach((s, i) => {
         insert.run(
@@ -1053,7 +1093,8 @@ class Storage {
           s.original_text === undefined ? s.text : s.original_text,
           s.status,
           s.confidence === undefined ? null : s.confidence,
-          s.words ? JSON.stringify(s.words) : null
+          s.words ? JSON.stringify(s.words) : null,
+          s.flags && s.flags.length ? JSON.stringify(s.flags) : null
         );
       });
       this.db
@@ -1215,8 +1256,8 @@ class Storage {
   _replaceSegments(transcriptId, segments) {
     this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
     const insert = this.db.prepare(
-      `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json, flags_json)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
     );
     segments.forEach((s, i) => {
       insert.run(
@@ -1230,7 +1271,8 @@ class Storage {
         s.original_text === undefined || s.original_text === null ? s.text : s.original_text,
         s.status,
         s.confidence === undefined ? null : s.confidence,
-        s.words ? JSON.stringify(s.words) : null
+        s.words ? JSON.stringify(s.words) : null,
+        s.flags && s.flags.length ? JSON.stringify(s.flags) : null
       );
     });
   }
@@ -1663,6 +1705,7 @@ function normalizeSegments(segments) {
       status,
       confidence: raw.confidence === null || raw.confidence === undefined ? null : Number(raw.confidence),
       words: Array.isArray(raw.words) ? raw.words : null,
+      flags: Array.isArray(raw.flags) ? raw.flags.filter((f) => typeof f === 'string' && f) : [],
     });
   }
   return out;
