@@ -128,7 +128,18 @@ class MediaService {
       throw err;
     }
     const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
-    const audio = streams.find((s) => s.codec_type === 'audio') || null;
+    const audioStreams = streams
+      .filter((s) => s.codec_type === 'audio')
+      .map((s, order) => ({
+        index: s.index,
+        order,
+        codec: s.codec_name || null,
+        channels: s.channels ?? null,
+        sampleRate: s.sample_rate ? Number(s.sample_rate) : null,
+        language: (s.tags && s.tags.language) || null,
+        title: (s.tags && s.tags.title) || null,
+      }));
+    const audio = audioStreams.length ? streams.find((s) => s.index === audioStreams[0].index) : null;
     const hasVideo = streams.some((s) => s.codec_type === 'video');
     const duration = parseDuration(parsed.format && parsed.format.duration) ??
       (audio ? parseDuration(audio.duration) : null);
@@ -145,15 +156,27 @@ class MediaService {
       channels: audio && audio.channels ? Number(audio.channels) : null,
       bitDepth: Number.isFinite(bitRate) && bitRate > 0 ? bitRate : null,
       channelLayout: audio ? audio.channel_layout || null : null,
+      // Multi-stream policy: the pipeline decodes audio stream order 0
+      // (`-map 0:a:0`) unless a caller selects another. The count and the full
+      // stream list are reported so the choice is visible rather than silent.
+      audioStreamCount: audioStreams.length,
+      audioStreams,
+      selectedAudioStreamOrder: audioStreams.length ? 0 : null,
     };
   }
 
   /**
    * Produce a 16 kHz mono PCM WAV working copy for the ASR engine. The
    * original evidence file is never modified.
+   *
+   * When a container holds more than one audio stream, `audioStreamOrder`
+   * selects which one is decoded (default 0). This is explicit rather than
+   * silent: the caller passes the order it probed, and the case history records
+   * it, so a multi-stream file never yields a transcript from an unstated track.
    */
-  async toAsrWav(inputPath, outputPath, { onProgress } = {}) {
+  async toAsrWav(inputPath, outputPath, { onProgress, audioStreamOrder = 0 } = {}) {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const mapOrder = Number.isInteger(audioStreamOrder) && audioStreamOrder >= 0 ? audioStreamOrder : 0;
     const args = [
       '-hide_banner',
       '-nostdin',
@@ -163,7 +186,7 @@ class MediaService {
       '-vn',
       '-sn',
       '-dn',
-      '-map', '0:a:0',
+      '-map', `0:a:${mapOrder}`,
       '-ac', '1',
       '-ar', '16000',
       '-c:a', 'pcm_s16le',
@@ -183,35 +206,102 @@ class MediaService {
     return outputPath;
   }
 
-  /** Read a decimated peak envelope for waveform rendering. */
-  async waveformPeaks(inputPath, buckets = 1600) {
-    const args = [
-      '-hide_banner', '-nostdin', '-loglevel', 'error',
-      '-i', inputPath,
-      '-vn', '-ac', '1', '-ar', '8000',
-      '-f', 's16le', '-',
-    ];
-    const result = await runProcess(this.ffmpeg, args, { timeoutMs: 600000, maxOutputBytes: 512 * 1024 * 1024 });
-    if (result.code !== 0) {
-      const err = new Error('Could not compute waveform.');
-      err.code = 'WAVEFORM_FAILED';
-      throw err;
-    }
-    const buf = Buffer.from(result.stdout, 'binary');
-    const sampleCount = Math.floor(buf.length / 2);
-    if (sampleCount === 0) return { buckets: 0, peaks: [] };
-    const perBucket = Math.max(1, Math.floor(sampleCount / buckets));
-    const peaks = [];
-    for (let i = 0; i < sampleCount; i += perBucket) {
-      let max = 0;
-      const end = Math.min(i + perBucket, sampleCount);
-      for (let j = i; j < end; j += 1) {
-        const v = Math.abs(buf.readInt16LE(j * 2)) / 32768;
-        if (v > max) max = v;
+  /**
+   * Read a decimated peak envelope for waveform rendering.
+   *
+   * The PCM stream is consumed incrementally and reduced to `buckets` peaks as
+   * it arrives, so a multi-hour recording never has to be held in memory in one
+   * piece. The previous implementation buffered the entire decoded stream and
+   * then round-tripped it through a lossy UTF-8 string; this reads the raw bytes
+   * and never leaves the binary domain.
+   */
+  waveformPeaks(inputPath, buckets = 1600) {
+    const target = Math.max(1, Math.floor(buckets));
+    return new Promise((resolve, reject) => {
+      let child;
+      try {
+        child = spawn(
+          this.ffmpeg,
+          [
+            '-hide_banner', '-nostdin', '-loglevel', 'error',
+            '-i', inputPath,
+            '-vn', '-ac', '1', '-ar', '8000',
+            '-f', 's16le', '-',
+          ],
+          { windowsHide: true, shell: false }
+        );
+      } catch (err) {
+        reject(Object.assign(err, { code: 'WAVEFORM_FAILED' }));
+        return;
       }
-      peaks.push(Math.round(max * 1000) / 1000);
-    }
-    return { buckets: peaks.length, peaks };
+
+      const peaks = [];
+      let leftover = null; // odd trailing byte carried to the next chunk
+      let max = 0;
+      let sampleIndex = 0;
+
+      // The bucket size is not known until the stream ends, so collect the peak
+      // of each fixed group of STRIDE samples as we go and decimate at the end.
+      // Memory stays O(samples / STRIDE) instead of O(samples).
+      const STRIDE = 64;
+
+      const consume = (buf) => {
+        if (leftover) {
+          buf = Buffer.concat([leftover, buf]);
+          leftover = null;
+        }
+        const samples = Math.floor(buf.length / 2);
+        for (let i = 0; i < samples; i += 1) {
+          const v = Math.abs(buf.readInt16LE(i * 2)) / 32768;
+          if (v > max) max = v;
+          if (++sampleIndex >= STRIDE) {
+            peaks.push(Math.round(max * 1000) / 1000);
+            max = 0;
+            sampleIndex = 0;
+          }
+        }
+        const consumed = samples * 2;
+        if (consumed < buf.length) leftover = Buffer.from(buf.subarray(consumed));
+      };
+
+      let stderr = '';
+      child.stdout.on('data', consume);
+      child.stderr.on('data', (d) => {
+        stderr += d.toString('utf8');
+        if (stderr.length > 8192) stderr = stderr.slice(-4096);
+      });
+      child.on('error', (err) => reject(Object.assign(err, { code: 'WAVEFORM_FAILED' })));
+      child.on('close', (code) => {
+        if (code !== 0) {
+          const err = new Error('Could not compute waveform.');
+          err.code = 'WAVEFORM_FAILED';
+          err.detail = stderr.trim().slice(0, 2000);
+          reject(err);
+          return;
+        }
+        if (max > 0) peaks.push(Math.round(max * 1000) / 1000);
+        if (!peaks.length) {
+          resolve({ buckets: 0, peaks: [] });
+          return;
+        }
+        // Decimate the stride peaks down to the requested bucket count.
+        const stridePeaks = peaks;
+        if (target >= stridePeaks.length) {
+          resolve({ buckets: stridePeaks.length, peaks: stridePeaks });
+          return;
+        }
+        const perBucket = stridePeaks.length / target;
+        const out = [];
+        for (let b = 0; b < target; b += 1) {
+          const start = Math.floor(b * perBucket);
+          const end = Math.floor((b + 1) * perBucket);
+          let m = 0;
+          for (let i = start; i < end; i += 1) if (stridePeaks[i] > m) m = stridePeaks[i];
+          out.push(m);
+        }
+        resolve({ buckets: out.length, peaks: out });
+      });
+    });
   }
 }
 
