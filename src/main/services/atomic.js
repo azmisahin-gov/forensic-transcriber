@@ -31,7 +31,7 @@ function writeFileAtomic(destPath, data, { fsync = true } = {}) {
     fd = fs.openSync(tmp, 'wx');
     fs.writeFileSync(fd, data);
     if (fsync) {
-      fs.fsyncSync(fd);
+      safeFsync(fd);
     }
     fs.closeSync(fd);
     fd = undefined;
@@ -62,13 +62,27 @@ function fsyncDir(dir) {
   try {
     const dfd = fs.openSync(dir, 'r');
     try {
-      fs.fsyncSync(dfd);
+      safeFsync(dfd);
     } finally {
       fs.closeSync(dfd);
     }
   } catch {
     // Directory fsync is not supported on every platform; the file itself is
     // already flushed, which is the important part.
+  }
+}
+
+/**
+ * fsync is a durability optimisation, not a correctness requirement: the rename
+ * is what keeps readers from ever seeing a partial file. Some platforms
+ * (notably Windows, for certain handles) reject fsync with EPERM/EINVAL, so it
+ * is attempted and, if unsupported, skipped rather than failing the write.
+ */
+function safeFsync(fd) {
+  try {
+    fs.fsyncSync(fd);
+  } catch (err) {
+    if (!['EPERM', 'EINVAL', 'ENOTSUP', 'EISDIR'].includes(err.code)) throw err;
   }
 }
 
@@ -83,7 +97,7 @@ function copyFileAtomic(srcPath, destPath, { fsync = true } = {}) {
     if (fsync) {
       const fd = fs.openSync(tmp, 'r');
       try {
-        fs.fsyncSync(fd);
+        safeFsync(fd);
       } finally {
         fs.closeSync(fd);
       }

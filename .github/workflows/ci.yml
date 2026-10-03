@@ -31,6 +31,27 @@ jobs:
       - name: Security check
         run: node scripts/security-check.js
 
+  # The product is Windows-only. The unit suite must pass on Windows, not just
+  # Linux, or a platform-specific failure (for example an fsync or path issue)
+  # only shows up during a release. This mirrors the release job's test step.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Unit tests (Windows)
+        run: node --test tests/unit/*.test.js
+
+      - name: Security check
+        run: node scripts/security-check.js
+
   integration:
     runs-on: ubuntu-latest
     steps:
