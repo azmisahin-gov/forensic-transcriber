@@ -45,7 +45,10 @@ const RULES = [
   },
   {
     id: 'no-telemetry-endpoint',
-    pattern: /https?:\/\/(?!huggingface\.co|github\.com|raw\.githubusercontent\.com|static\.rust-lang\.org|docs\.|localhost|127\.0\.0\.1)[a-z0-9.-]+\.[a-z]{2,}/i,
+    // XML namespace identifiers (OOXML/OPC) are not endpoints; they name a
+    // schema and are never fetched. Allowlisted so document generation is not
+    // mistaken for a telemetry call.
+    pattern: /https?:\/\/(?!huggingface\.co|github\.com|raw\.githubusercontent\.com|static\.rust-lang\.org|docs\.|localhost|127\.0\.0\.1|schemas\.openxmlformats\.org|openxmlformats\.org|purl\.org|w3\.org)[a-z0-9.-]+\.[a-z]{2,}/i,
     message: 'Unexpected remote endpoint (telemetry/analytics are not permitted at runtime).',
     allowFiles: [/tests[\\/]/, /docs[\\/]/, /site[\\/]/, /scripts[\\/]/, /\.md$/],
   },

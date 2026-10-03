@@ -281,9 +281,10 @@ function collectTranscripts({ caseRecord, evidence, storage }) {
 }
 
 /** Build a structured report document from case data, without writing anything. */
-function buildReport({ caseRecord, evidence, transcripts, notes, engineInfo, report }) {
+function buildReport({ caseRecord, evidence, transcripts, notes, engineInfo, report, integrity = [], dashboard = null }) {
   const base = report || { template: 'generic', title: caseRecord.title, sections: defaultSections('generic') };
   const sections = autoPopulate(base, { caseRecord, evidence, transcripts, notes, engineInfo });
+  const checklist = buildChecklist({ caseRecord, evidence, transcripts, integrity, notes, report: base, dashboard });
   return {
     case_id: caseRecord.case_id,
     template: base.template || 'generic',
@@ -311,6 +312,7 @@ function buildReport({ caseRecord, evidence, transcripts, notes, engineInfo, rep
     })),
     transcripts,
     sections,
+    checklist,
     notice:
       'Bu belge teknik bir çalışma ürünüdür. Otomatik konuşma tanıma çıktısı makine çıktısıdır ve ' +
       'uzman görüşü değildir. Belge hukuki değerlendirme, kimlik tespiti veya delilin gerçekliğine ' +
@@ -331,6 +333,13 @@ function reportToTxt(report) {
     lines.push(s.title.toUpperCase());
     lines.push('-'.repeat(64));
     lines.push(s.body || '(boş)');
+    lines.push('');
+  }
+  const rows = checklistRows(report);
+  if (rows.length) {
+    lines.push('TESLİM HAZIRLIĞI KONTROL LİSTESİ');
+    lines.push('-'.repeat(64));
+    for (const r of rows) lines.push(`[${r.status}] ${r.label}${r.detail ? ` — ${r.detail}` : ''}`);
     lines.push('');
   }
   lines.push('='.repeat(64));
@@ -390,6 +399,20 @@ function buildChecklist({ caseRecord, evidence, transcripts, integrity = [], not
   return { items, ready };
 }
 
+/**
+ * Human-readable checklist rows, shared by every export format so the DOCX,
+ * PDF, TXT and HTML reports all show the same delivery-readiness view.
+ */
+function checklistRows(report) {
+  const checklist = report && report.checklist;
+  if (!checklist || !Array.isArray(checklist.items)) return [];
+  return checklist.items.map((i) => ({
+    status: i.manual ? 'ELLE' : i.status === 'ok' ? 'TAMAM' : 'EKSİK',
+    label: i.label,
+    detail: i.detail || '',
+  }));
+}
+
 function reportToHtml(report) {
   const sections = report.sections
     .map(
@@ -399,6 +422,13 @@ function reportToHtml(report) {
   </section>`
     )
     .join('\n');
+  const rows = checklistRows(report);
+  const checklistHtml = rows.length
+    ? `  <section>
+    <h2>Teslim Hazırlığı Kontrol Listesi</h2>
+    <pre>${esc(rows.map((r) => `[${r.status}] ${r.label}${r.detail ? ` — ${r.detail}` : ''}`).join('\n'))}</pre>
+  </section>`
+    : '';
   return `<!doctype html>
 <html lang="tr">
 <head>
@@ -431,6 +461,7 @@ function reportToHtml(report) {
   <div class="notice">${esc(report.notice)}</div>
   <main>
 ${sections}
+${checklistHtml}
   </main>
   <footer>Forensic Transcriber — 56.12 teknik çalışma ürünü.</footer>
 </body>
@@ -447,6 +478,7 @@ module.exports = {
   collectTranscripts,
   buildReport,
   buildChecklist,
+  checklistRows,
   reportToTxt,
   reportToHtml,
   formatClock,

@@ -2,6 +2,7 @@
 
 const zlib = require('node:zlib');
 const { createZip } = require('./zip');
+const reports = require('./reports');
 
 /**
  * DOCX and PDF rendering for the report workspace.
@@ -60,6 +61,13 @@ function reportToDocx(report) {
       `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">${esc(s.title)}</w:t></w:r></w:p>`
     );
     body.push(textToParagraphs(s.body || ''));
+  }
+  const rows = reports.checklistRows(report);
+  if (rows.length) {
+    body.push(
+      `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">Teslim Hazırlığı Kontrol Listesi</w:t></w:r></w:p>`
+    );
+    body.push(textToParagraphs(rows.map((r) => `[${r.status}] ${r.label}${r.detail ? ` — ${r.detail}` : ''}`).join('\n')));
   }
   body.push(textToParagraphs(report.notice));
 
@@ -171,6 +179,16 @@ function buildPdfLines(report) {
     lines.push({ text: s.title, size: 12, bold: true });
     for (const raw of String(s.body || '').split('\n')) {
       for (const w of wrapLine(raw)) lines.push({ text: w, size: 10 });
+    }
+    lines.push({ text: '', size: 10 });
+  }
+  const rows = reports.checklistRows(report);
+  if (rows.length) {
+    lines.push({ text: 'Teslim Hazırlığı Kontrol Listesi', size: 12, bold: true });
+    for (const r of rows) {
+      for (const w of wrapLine(`[${r.status}] ${r.label}${r.detail ? ` — ${r.detail}` : ''}`)) {
+        lines.push({ text: w, size: 10 });
+      }
     }
     lines.push({ text: '', size: 10 });
   }
