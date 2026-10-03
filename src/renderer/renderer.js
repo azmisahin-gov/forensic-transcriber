@@ -37,6 +37,7 @@
     lastRunMode: null,
     dashboard: null,
     notes: [],
+    findings: [],
     report: null,
     revisions: [],
     searchQuery: '',
@@ -683,7 +684,9 @@
       ['deadline', t('dash.deadline'), d.due_date || t('dash.noDeadline'), deadlineClass(d.due_date)],
       ['integrity', t('dash.integrity'), integrityOk ? t('dash.integrityOk') : `${d.failed_runs}`, integrityOk ? 'ok' : 'warn'],
       ['notes', t('dash.notes'), d.notes, ''],
+      ['findings', t('dash.findings'), d.findings, d.findings > 0 ? 'ok' : ''],
       ['revisions', t('dash.revisions'), d.revisions, ''],
+      ['reportRevisions', t('dash.reportRevisions'), d.report_revisions, ''],
       ['missingFields', t('dash.missingFields'), d.missing_assignment_fields, d.missing_assignment_fields > 0 ? 'warn' : 'ok'],
     ];
     for (const [metric, label, value, cls] of rows) {
@@ -878,6 +881,7 @@
     if (!state.caseRecord) return;
     $('#dialog-report').showModal();
     await refreshChecklist();
+    await renderReportRevisions();
   }
 
   async function refreshChecklist() {
@@ -916,6 +920,210 @@
       if (open) await call(api.exports.reveal(state.caseRecord.case_id));
     } catch (err) {
       toast(`${t('error.reportExport')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // Every report save appends an immutable revision. Restoring one makes it the
+  // working draft again without deleting the newer snapshots.
+  async function renderReportRevisions() {
+    const ul = $('#report-revisions');
+    if (!ul || !state.caseRecord) return;
+    ul.innerHTML = '';
+    let revisions = [];
+    try {
+      revisions = await call(api.report.revisions(state.caseRecord.case_id));
+    } catch (err) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = errText(err);
+      ul.appendChild(li);
+      return;
+    }
+    if (!revisions.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('report.noRevisions');
+      ul.appendChild(li);
+      return;
+    }
+    for (const rev of revisions) {
+      const li = document.createElement('li');
+      li.className = 'revision-row';
+      const label = document.createElement('span');
+      label.className = 'rev-state';
+      label.textContent = `${rev.state}${rev.is_current ? ` · ${t('report.current')}` : ''}`;
+      const meta = document.createElement('span');
+      meta.className = 'muted small';
+      meta.textContent = `${rev.title || '—'} · ${new Date(rev.created_at).toLocaleString()}`;
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      li.append(label, meta, spacer);
+      if (!rev.is_current) {
+        li.appendChild(actionButton(t('report.restore'), async () => {
+          try {
+            await call(api.report.setRevision(state.caseRecord.case_id, rev.revision_id));
+            toast(t('msg.reportRevisionRestored'), 'success');
+            await refreshChecklist();
+            await renderReportRevisions();
+          } catch (err) {
+            toast(`${t('error.reportRevision')}: ${errText(err)}`, 'error');
+          }
+        }));
+      }
+      ul.appendChild(li);
+    }
+  }
+
+  // ---------------------------------------------------------------- findings
+  async function openFindings() {
+    if (!state.caseRecord) return;
+    $('#dialog-findings').showModal();
+    await loadFindings();
+  }
+
+  async function loadFindings() {
+    try {
+      state.findings = await call(api.findings.list(state.caseRecord.case_id));
+    } catch (err) {
+      state.findings = [];
+    }
+    renderFindings();
+    $('#finding-title').value = '';
+    $('#finding-observation').value = '';
+    $('#finding-at').value = audio ? String(audio.currentTime.toFixed(1)) : '';
+  }
+
+  function renderFindings() {
+    const ul = $('#findings-list');
+    ul.innerHTML = '';
+    if (!state.findings.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('finding.empty');
+      ul.appendChild(li);
+      return;
+    }
+    for (const f of state.findings) {
+      const li = document.createElement('li');
+      li.className = 'finding-row';
+      const title = document.createElement('div');
+      title.className = 'body';
+      title.textContent = f.title || '—';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const bits = [];
+      if (f.evidence_id) bits.push(f.evidence_id);
+      if (f.at_seconds != null) bits.push(formatClock(f.at_seconds));
+      bits.push(new Date(f.created_at).toLocaleString());
+      const stamp = document.createElement('span');
+      stamp.textContent = bits.join(' · ');
+      meta.appendChild(stamp);
+      if (f.observation) {
+        const obs = document.createElement('span');
+        obs.className = 'cat';
+        obs.textContent = f.observation;
+        meta.appendChild(obs);
+      }
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      meta.appendChild(spacer);
+      meta.appendChild(actionButton(t('note.delete'), async () => {
+        try {
+          await call(api.findings.remove(f.finding_id));
+          state.findings = state.findings.filter((x) => x.finding_id !== f.finding_id);
+          renderFindings();
+          await refreshDashboard();
+        } catch (err) {
+          toast(`${t('error.findingDelete')}: ${errText(err)}`, 'error');
+        }
+      }));
+      li.append(title, meta);
+      ul.appendChild(li);
+    }
+  }
+
+  async function addFinding() {
+    if (!state.caseRecord) return;
+    const title = $('#finding-title').value.trim();
+    if (!title) {
+      toast(t('error.writeFirst'), 'error');
+      return;
+    }
+    const atRaw = $('#finding-at').value.trim();
+    try {
+      const finding = await call(api.findings.create(state.caseRecord.case_id, {
+        title,
+        observation: $('#finding-observation').value.trim(),
+        evidenceId: state.activeEvidenceId || null,
+        atSeconds: atRaw === '' ? null : Number(atRaw),
+      }));
+      state.findings.push(finding);
+      renderFindings();
+      $('#finding-title').value = '';
+      $('#finding-observation').value = '';
+      await refreshDashboard();
+    } catch (err) {
+      toast(`${t('error.findingAdd')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ------------------------------------------------------------ case search
+  function openCaseSearch() {
+    if (!state.caseRecord) return;
+    $('#dialog-search').showModal();
+    $('#case-search-input').focus();
+  }
+
+  async function runCaseSearch() {
+    const query = $('#case-search-input').value.trim();
+    const ul = $('#case-search-results');
+    ul.innerHTML = '';
+    if (!query) return;
+    try {
+      const res = await call(api.search.case(state.caseRecord.case_id, query));
+      if (!res.hits.length) {
+        const li = document.createElement('li');
+        li.className = 'muted small';
+        li.textContent = t('search.noResults');
+        ul.appendChild(li);
+        return;
+      }
+      for (const hit of res.hits) {
+        const li = document.createElement('li');
+        li.className = 'search-row';
+        const type = document.createElement('span');
+        type.className = 'rev-state';
+        type.textContent = hit.type;
+        const text = document.createElement('span');
+        text.className = 'body';
+        const where = hit.start != null ? `${formatClock(hit.start)} · ` : '';
+        text.textContent = `${where}${hit.snippet || hit.body || hit.text || ''}`;
+        li.append(type, text);
+        if (hit.evidence_id) {
+          li.appendChild(actionButton(t('search.open'), async () => {
+            $('#dialog-search').close();
+            await selectEvidence(hit.evidence_id);
+          }));
+        }
+        ul.appendChild(li);
+      }
+    } catch (err) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = `${t('error.search')}: ${errText(err)}`;
+      ul.appendChild(li);
+    }
+  }
+
+  async function prepareUyap() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.uyap.prepare(state.caseRecord.case_id, {}));
+      toast(t('msg.uyapPrepared', { n: res.files.length }), 'success');
+      const open = await confirmDialog(t('confirm.openExportsTitle'), t('confirm.openExportsBody'));
+      if (open) await call(api.exports.reveal(state.caseRecord.case_id));
+    } catch (err) {
+      toast(`${t('error.uyap')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -1812,11 +2020,16 @@
     bind('#btn-archive-export', 'click', backUpCase);
     bind('#btn-archive-import', 'click', restoreCase);
     bind('#btn-notes', 'click', openNotes);
+    bind('#btn-findings', 'click', openFindings);
     bind('#btn-report', 'click', openReport);
+    bind('#btn-search', 'click', openCaseSearch);
+    bind('#btn-uyap', 'click', prepareUyap);
     bind('#btn-delivery', 'click', () => $('#dialog-delivery').showModal());
     bind('#btn-support', 'click', () => $('#dialog-support').showModal());
     bind('#btn-edit-case', 'click', openCaseEdit);
     bind('#btn-add-note', 'click', addNote);
+    bind('#btn-add-finding', 'click', addFinding);
+    bind('#btn-case-search', 'click', runCaseSearch);
     bind('#btn-report-build', 'click', refreshChecklist);
     bind('#btn-report-export', 'click', exportReport);
 
