@@ -112,17 +112,20 @@ const unexpected = [...runtimeUrls].filter((h) => !allowedHosts.has(h));
 if (unexpected.length) add('warn', 'runtime-network', `Runtime references unexpected hosts: ${unexpected.join(', ')}`);
 else add('info', 'runtime-network', `Runtime host references limited to: ${[...runtimeUrls].join(', ') || 'none'}.`);
 
-// 3. Network APIs may only appear in the model downloader.
+// 3. Direct network APIs may only appear in the model downloader. The updater
+//    uses electron-updater, which owns its own transport, and is allowed only in
+//    updater.js; both are the two disclosed outbound paths.
+const NETWORK_ALLOWED = [/model-manager\.js$/, /updater\.js$/];
 for (const file of runtimeFiles) {
   const rel = path.relative(REPO_ROOT, file);
   const code = stripStringsAndComments(fs.readFileSync(file, 'utf8'));
   if (/\b(fetch|XMLHttpRequest|net\.request|https?\.get|https?\.request)\b/.test(code)) {
-    if (!/model-manager\.js$/.test(rel)) {
-      add('critical', 'runtime-network', `Network API used outside the model downloader: ${rel}`);
+    if (!NETWORK_ALLOWED.some((re) => re.test(rel))) {
+      add('critical', 'runtime-network', `Network API used outside the model downloader/updater: ${rel}`);
     }
   }
 }
-add('info', 'runtime-network', 'Model download is the only outbound network path (model-manager.js).');
+add('info', 'runtime-network', 'Outbound paths are limited to model-manager.js (model download) and updater.js (update check), both disclosed.');
 
 // 4. No arbitrary shell execution in runtime source.
 let shellHits = 0;
