@@ -2,35 +2,36 @@
 
 CURRENT_PHASE: P11 — release lifecycle
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
-LAST_UPDATED: 2026-10-02
+LAST_UPDATED: 2026-10-03
 
-## First distributable release published: v0.1.1
+## First distributable release published: v0.1.2
 
 The controlled release lifecycle ran end to end and published a real,
-distributable release.
+distributable release that fixes the v0.1.1 renderer blocker.
 
 | | |
 | --- | --- |
-| Version | **0.1.1** (patch from 0.1.0) |
-| Tag | `v0.1.1` → `af6b1a7` ("Release 0.1.1") |
-| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.1 |
-| Assets | `ForensicTranscriber-Setup-x64.exe` (192 564 370 B), `ForensicTranscriber-Portable-x64.zip` (260 840 978 B), `ForensicTranscriber-ModelPack-0.1.1.zip` (534 060 311 B), `latest.yml` (363 B), `SHA256SUMS.txt` (309 B) |
-| Workflow run | `37078216359` — version, verify-version, build-windows, model-package, publish all **success** |
+| Version | **0.1.2** (patch from 0.1.1) |
+| Tag | `v0.1.2` → `a6ef155` (tag object `a6ef155…`) → commit `95cab00` ("Release 0.1.2") |
+| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.2 |
+| Assets | `ForensicTranscriber-Setup-x64.exe` (192 568 667 B), `ForensicTranscriber-Portable-x64.zip` (260 846 211 B), `ForensicTranscriber-ModelPack-0.1.2.zip` (534 060 310 B), `latest.yml` (363 B), `SHA256SUMS.txt` (309 B) |
+| Workflow run | `37086334972` — version, verify-version, build-windows, model-package, publish all **success** |
 
 Verified after publication:
 - `SHA256SUMS.txt` covers all three distributables and `sha256sum -c` passes for
   every downloaded asset.
-- `latest.yml` reports `version: 0.1.1`, `path:
+- `latest.yml` reports `version: 0.1.2`, `path:
   ForensicTranscriber-Setup-x64.exe`, and its **sha512 exactly matches** the
   published installer bytes (checked with `node:crypto`).
-- Tag, `package.json`, `package-lock.json` (both fields) and `latest.yml` all
-  agree on `0.1.1`.
-- The packaged application binary is a genuine **x64 PE**; the portable zip
-  contains `resources/vendor/bin/{whisper-cli.exe,ffmpeg.exe,ffprobe.exe}` and
-  **no Linux artifacts**.
-- The model package contains the pinned ASR + VAD models with their expected
-  checksums.
-- `v0.1.0` tag and release were **not** modified.
+- Tag, `package.json`, `package-lock.json` and `latest.yml` all agree on `0.1.2`.
+- **The renderer fix is present in the published artifact**: the asar inside the
+  portable zip loads `../shared/constants.js` before `lib/transcript-store.js`.
+- The packaged app reports version `0.1.2` and contains `original_text`,
+  `markBootReady`, the visible version element and the Diagnostics dialog.
+- `v0.1.0` and `v0.1.1` tags and releases were **not** modified.
+
+`v0.1.1` shipped a **fatal renderer crash** (the UI never started) and is
+superseded; it remains published and untouched for the record.
 
 ## Fixes applied on top of the merged lifecycle
 
@@ -58,7 +59,7 @@ Verified after publication:
   release and an installed Windows build. The configuration, state machine,
   metadata and safety properties are verified; the live update is not.
 - **GPU runtime is not in this release.** The hosted `windows-latest` runner has
-  no CUDA toolkit, so `v0.1.1` ships the **CPU runtime only**. The application
+  no CUDA toolkit, so `v0.1.2` ships the **CPU runtime only**. The application
   reports CPU mode and the GPU runtime remains unverified.
 - **Not verified on target NVIDIA hardware** (no RTX 3060 available).
 - **The Windows installer was not launched on real Windows hardware**; the
@@ -69,7 +70,7 @@ Verified after publication:
 
 ## Next exact action
 
-Install `ForensicTranscriber-Setup-x64.exe` (v0.1.1) on a real Windows x64
+Install `ForensicTranscriber-Setup-x64.exe` (v0.1.2) on a real Windows x64
 machine, confirm transcription and the **Check engine** report, then publish a
 second release to exercise the live auto-update path.
 
@@ -127,7 +128,7 @@ live auto-update and target-machine validation outstanding and marked unverified
 ## Next exact action
 
 Merge this branch, then run the **Release (version)** workflow with `patch` to
-produce a real `v0.1.1` release, and confirm on a Windows machine that the
+produce the next patch release, and confirm on a Windows machine that the
 installed application detects and installs it.
 
 VERIFICATION_STATUS: automated and packaged-app validation complete; live
