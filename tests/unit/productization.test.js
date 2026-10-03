@@ -349,3 +349,42 @@ test('TranscriptStore.toggleFlag toggles and toPayload carries flags through sav
   assert.deepEqual(reopened[0].flags, ['UNCLEAR'], 'flags must round-trip through the store payload');
   storage.close();
 });
+
+
+// ------------------------------------------------------- localization (i18n)
+const i18n = require('../../src/shared/i18n');
+
+test('Turkish and English dictionaries expose exactly the same keys', () => {
+  const tr = Object.keys(i18n.LOCALES.tr).sort();
+  const en = Object.keys(i18n.LOCALES.en).sort();
+  assert.deepEqual(tr, en, 'a key present in one locale must exist in the other');
+  assert.ok(tr.length > 300, 'the work station is localized with a substantial dictionary');
+});
+
+test('every data-i18n key used by index.html resolves in both locales', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'index.html'), 'utf8');
+  const specs = [...html.matchAll(/data-i18n(?:-attr)?="([^"]+)"/g)].map((m) => m[1]);
+  const keys = new Set();
+  for (const spec of specs) {
+    if (spec.includes(':')) {
+      for (const part of spec.split(',')) {
+        const key = part.split(':')[1];
+        if (key) keys.add(key.trim());
+      }
+    } else {
+      keys.add(spec);
+    }
+  }
+  assert.ok(keys.size > 50, 'the markup is fully localized through data attributes');
+  for (const key of keys) {
+    for (const locale of i18n.LOCALE_VALUES) {
+      assert.notEqual(i18n.translate(locale, key), key, `${key} missing in ${locale}`);
+    }
+  }
+});
+
+test('an unknown locale falls back to Turkish without throwing', () => {
+  assert.equal(i18n.normalize('de'), i18n.DEFAULT_LOCALE);
+  assert.equal(i18n.translate('de', 'app.about'), i18n.LOCALES.tr['app.about']);
+  assert.equal(i18n.translate('tr', 'does.not.exist', { n: 1 }), 'does.not.exist');
+});
