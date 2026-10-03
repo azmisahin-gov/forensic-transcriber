@@ -976,10 +976,20 @@
       }
       renderEngineStatus(state.engineProbe, state.lastRunMode);
       const mode = res.runtimeSelection ? res.runtimeSelection.mode.toUpperCase() : null;
-      toast(
-        `Transcription complete${mode ? ` (${mode})` : ''}. Review each segment against the audio.`,
-        'success'
-      );
+      if (res.revisionBecameCurrent === false) {
+        // The new machine transcript was stored as a separate revision so the
+        // existing reviewed/edited/verified work was not overwritten. The
+        // workspace still shows the human revision.
+        toast(
+          'New machine transcript saved as a separate revision. Your reviewed/verified work was preserved and is still shown.',
+          'success'
+        );
+      } else {
+        toast(
+          `Transcription complete${mode ? ` (${mode})` : ''}. Review each segment against the audio.`,
+          'success'
+        );
+      }
     } catch (err) {
       const el = $('#transcribe-error');
       el.textContent = errText(err) + (err.detail ? `\n${err.detail}` : '');

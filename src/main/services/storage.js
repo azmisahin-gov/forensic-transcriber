@@ -4,15 +4,37 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { copyFileAtomic, writeFileAtomic } = require('./atomic');
+const { copyFileAtomic, fsyncDir } = require('./atomic');
 const {
   HISTORY_ACTIONS,
   SEGMENT_STATUS,
   SEGMENT_STATUS_VALUES,
+  REVISION_STATE,
   UNCLEAR_PLACEHOLDER,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+
+/**
+ * Map the most advanced human status in a transcript to the revision state that
+ * describes the snapshot. An empty/unedited transcript is MACHINE output.
+ */
+function statusSetToRevisionState(segments) {
+  let state = REVISION_STATE.MACHINE;
+  for (const s of segments) {
+    if (s.status === SEGMENT_STATUS.VERIFIED) return REVISION_STATE.VERIFIED;
+    if (s.status === SEGMENT_STATUS.EDITED) state = REVISION_STATE.EDITED;
+    else if (s.status === SEGMENT_STATUS.REVIEWED && state === REVISION_STATE.MACHINE) {
+      state = REVISION_STATE.REVIEWED;
+    }
+  }
+  return state;
+}
+
+/** A segment set that carries any human action at all. */
+function segmentsHaveHumanWork(segments) {
+  return segments.some((s) => s.status !== SEGMENT_STATUS.AUTOMATIC);
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -75,7 +97,15 @@ class Storage {
     this.dbPath = path.join(baseDir, 'forensic-transcriber.db');
     this.db = new DatabaseSync(this.dbPath);
     this._configure();
-    this._migrate();
+    try {
+      this._migrate();
+    } catch (err) {
+      // A failed migration must not leave a half-open handle behind; close it so
+      // the caller can retry (for example after freeing disk space for the
+      // backup) without a lock on the database file.
+      this.close();
+      throw err;
+    }
   }
 
   /**
@@ -126,18 +156,24 @@ class Storage {
     const needsMigration = stored !== SCHEMA_VERSION;
 
     // Back up the database before any migration that could rewrite it, so a
-    // crash or a bug mid-migration can never destroy the only copy. The backup
-    // is a byte-for-byte copy of the database file taken after a WAL checkpoint.
+    // crash or a bug mid-migration can never destroy the only copy. This is
+    // fail-closed: if the backup cannot be written we abort the migration and
+    // leave the existing database (and its schema version) untouched, rather
+    // than risk rewriting user data with no recovery copy.
     let backupPath = null;
     if (needsMigration && this._databaseHasUserData()) {
       backupPath = `${this.dbPath}.pre-migration-v${stored}-${Date.now()}.bak`;
       try {
         this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
         copyFileAtomic(this.dbPath, backupPath);
-      } catch {
-        // If the backup cannot be written we still migrate; the migrations are
-        // transactional, but the missing backup is worth knowing about.
-        backupPath = null;
+      } catch (backupErr) {
+        const err = new Error(
+          `Refusing to migrate: could not back up the database (${backupErr.message}). ` +
+            'The existing database was left unchanged.'
+        );
+        err.code = 'MIGRATION_BACKUP_FAILED';
+        err.cause = backupErr;
+        throw err;
       }
     }
 
@@ -145,6 +181,7 @@ class Storage {
 
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
+    this._migrateEvidenceAudioStreamCount();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
@@ -190,7 +227,11 @@ class Storage {
         channels INTEGER,
         bit_depth INTEGER,
         sha256 TEXT NOT NULL,
-        imported_at TEXT NOT NULL
+        imported_at TEXT NOT NULL,
+        -- Number of audio streams in the container. >1 means the pipeline
+        -- decodes stream order 0; the UI warns instead of transcribing a
+        -- multi-track file silently.
+        audio_stream_count INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS transcripts (
@@ -268,14 +309,48 @@ class Storage {
       );
       CREATE INDEX IF NOT EXISTS idx_runs_case ON transcription_runs(case_id, started_at);
       CREATE INDEX IF NOT EXISTS idx_runs_evidence ON transcription_runs(evidence_id, started_at);
+
+      -- Immutable snapshots of a transcript. A new ASR run, or a save, appends a
+      -- revision instead of overwriting the previous one, so reviewed/edited/
+      -- verified human work is never silently destroyed. Exactly one revision
+      -- per transcript is current (is_current = 1); the rest stay readable.
+      CREATE TABLE IF NOT EXISTS transcript_revisions (
+        revision_id TEXT PRIMARY KEY,
+        transcript_id TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
+        run_id TEXT,
+        state TEXT NOT NULL,
+        is_current INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        segments_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_revisions_transcript ON transcript_revisions(transcript_id, created_at);
     `);
 
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
+    this._migrateEvidenceAudioStreamCount();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
       .run(String(SCHEMA_VERSION));
+  }
+
+  /**
+   * Schema migration: add evidence.audio_stream_count for databases created
+   * before multi-audio-stream tracking. Existing rows stay NULL (unknown),
+   * which reads as "not inspected" rather than "single stream".
+   */
+  _migrateEvidenceAudioStreamCount() {
+    const columns = this.db.prepare('PRAGMA table_info(evidence)').all().map((c) => c.name);
+    if (columns.includes('audio_stream_count')) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec('ALTER TABLE evidence ADD COLUMN audio_stream_count INTEGER');
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   /**
@@ -473,42 +548,64 @@ class Storage {
     fs.mkdirSync(dir, { recursive: true });
     const destPath = path.join(dir, storedName);
 
-    await fs.promises.copyFile(sourcePath, destPath);
-    const digest = await sha256File(destPath);
-    const finalStat = fs.statSync(destPath);
+    // Copy into a temp file, verify it, then rename atomically. A crash or a
+    // failed copy can therefore never leave a half-written file as this case's
+    // evidence, and no evidence row is written until the bytes are complete.
+    const tmpPath = path.join(dir, `.${storedName}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+    try {
+      await fs.promises.copyFile(sourcePath, tmpPath);
+      const finalStat = fs.statSync(tmpPath);
+      if (finalStat.size !== stat.size) {
+        const err = new Error('Evidence copy is incomplete (size mismatch).');
+        err.code = 'EVIDENCE_COPY_INCOMPLETE';
+        throw err;
+      }
+      const digest = await sha256File(tmpPath);
+      fs.renameSync(tmpPath, destPath);
+      fsyncDir(dir);
 
-    const ts = nowIso();
-    this.db
-      .prepare(
-        `INSERT INTO evidence(
-           evidence_id, case_id, original_name, stored_name, original_path, derived_path,
-           size_bytes, format, codec, duration_seconds, sample_rate, channels, bit_depth,
-           sha256, imported_at
-         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      )
-      .run(
-        evidenceId,
-        caseId,
+      const ts = nowIso();
+      this.db
+        .prepare(
+          `INSERT INTO evidence(
+             evidence_id, case_id, original_name, stored_name, original_path, derived_path,
+             size_bytes, format, codec, duration_seconds, sample_rate, channels, bit_depth,
+             sha256, imported_at, audio_stream_count
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+        )
+        .run(
+          evidenceId,
+          caseId,
+          originalName,
+          storedName,
+          destPath,
+          null,
+          finalStat.size,
+          metadata.format ?? null,
+          metadata.codec ?? null,
+          metadata.durationSeconds ?? null,
+          metadata.sampleRate ?? null,
+          metadata.channels ?? null,
+          metadata.bitDepth ?? null,
+          digest,
+          ts,
+          Number.isFinite(metadata.audioStreamCount) ? metadata.audioStreamCount : null
+        );
+
+      this.recordHistory(caseId, HISTORY_ACTIONS.EVIDENCE_IMPORTED, evidenceId, {
         originalName,
-        storedName,
-        destPath,
-        null,
-        finalStat.size,
-        metadata.format ?? null,
-        metadata.codec ?? null,
-        metadata.durationSeconds ?? null,
-        metadata.sampleRate ?? null,
-        metadata.channels ?? null,
-        metadata.bitDepth ?? null,
-        digest,
-        ts
-      );
+        sizeBytes: finalStat.size,
+        sha256: digest,
+      });
+    } catch (err) {
+      try {
+        fs.rmSync(tmpPath, { force: true });
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    }
 
-    this.recordHistory(caseId, HISTORY_ACTIONS.EVIDENCE_IMPORTED, evidenceId, {
-      originalName,
-      sizeBytes: finalStat.size,
-      sha256: digest,
-    });
     this._touchCase(caseId);
     return this.getEvidence(evidenceId);
   }
@@ -571,11 +668,17 @@ class Storage {
   }
 
   /**
-   * Persist a transcript. Segments are written as a whole (the renderer owns
-   * ordering/undo); a diff is recorded to the history table so the software
-   * can show what changed without claiming a legal chain of custody.
+   * Persist a transcript as a new immutable revision.
+   *
+   * A save always appends a revision. Human saves (REVIEWED/EDITED/VERIFIED, or
+   * an explicit review save) become the current revision. A machine (ASR) save
+   * becomes current only on the first transcription of an evidence file;
+   * thereafter it is stored as an additional, non-current revision so a new ASR
+   * run can never silently overwrite reviewed/edited/verified human work. The
+   * caller opts back in with `forceCurrent` (used when the operator explicitly
+   * accepts the new machine transcript).
    */
-  saveTranscript(caseId, evidenceId, { language = 'tr', modelId, engine, segments, source = 'import' }) {
+  saveTranscript(caseId, evidenceId, { language = 'tr', modelId, engine, segments, source = 'import', runId = null, forceCurrent = false }) {
     const kase = this.getCase(caseId);
     if (!kase) {
       const err = new Error(`Case not found: ${caseId}`);
@@ -594,6 +697,47 @@ class Storage {
     const ts = nowIso();
     const transcriptId = existing ? existing.transcript_id : makeId('TRANSCRIPT');
 
+    let currentRevision = this.getCurrentRevision(transcriptId);
+    // A transcript created before revisions existed has no revision row; capture
+    // its current segments as the baseline MACHINE revision before appending.
+    if (existing && !currentRevision) {
+      const legacySegments = this.getSegments(transcriptId);
+      currentRevision = this._createRevision(transcriptId, {
+        state: statusSetToRevisionState(legacySegments),
+        isCurrent: true,
+        runId: null,
+        segments: legacySegments,
+        createdAt: ts,
+      });
+    }
+
+    const incomingState = statusSetToRevisionState(normalized);
+    const isHumanSave = segmentsHaveHumanWork(normalized) || source !== 'asr';
+    let makeCurrent = forceCurrent || !existing || isHumanSave || !currentRevision;
+    // Never let a machine save displace a human current revision.
+    if (makeCurrent && !isHumanSave && currentRevision && currentRevision.state !== REVISION_STATE.MACHINE) {
+      makeCurrent = false;
+    }
+
+    // Preserve the text the engine originally produced. A segment that already
+    // exists keeps its stored original_text; a brand-new segment records the
+    // incoming text as the original. Read the previous values before rewriting.
+    const previousOriginal = new Map();
+    if (existing) {
+      for (const row of this.db
+        .prepare('SELECT segment_id, original_text FROM segments WHERE transcript_id = ?')
+        .all(transcriptId)) {
+        previousOriginal.set(row.segment_id, row.original_text);
+      }
+    }
+    const revisionSegments = normalized.map((s) => {
+      const carried = previousOriginal.has(s.segment_id)
+        ? previousOriginal.get(s.segment_id)
+        : (s.original_text ?? s.text);
+      return { ...s, original_text: carried === undefined ? s.text : carried };
+    });
+
+    let newRevision;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       if (!existing) {
@@ -609,44 +753,36 @@ class Storage {
           .run(language, modelId ?? existing.model_id, engine ?? existing.engine, ts, transcriptId);
       }
 
-      // Preserve the text the engine originally produced. A segment that already
-      // exists keeps its stored original_text; a brand-new segment (the first
-      // transcription, or a manual insert) records the incoming text as the
-      // original. This is what stops an expert edit from destroying the
-      // automatic output, including across save and reopen.
-      // The previous values must be read BEFORE the delete below.
-      const previousOriginal = new Map();
-      if (existing) {
-        for (const row of this.db
-          .prepare('SELECT segment_id, original_text FROM segments WHERE transcript_id = ?')
-          .all(transcriptId)) {
-          previousOriginal.set(row.segment_id, row.original_text);
-        }
-      }
-
-      this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
-      const insert = this.db.prepare(
-        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
-      );
-      normalized.forEach((s, i) => {
-        const carried = previousOriginal.has(s.segment_id)
-          ? previousOriginal.get(s.segment_id)
-          : (s.original_text ?? s.text);
-        insert.run(
-          s.segment_id,
-          transcriptId,
-          i,
-          s.start,
-          s.end,
-          s.speaker,
-          s.text,
-          carried === undefined ? s.text : carried,
-          s.status,
-          s.confidence,
-          s.words ? JSON.stringify(s.words) : null
-        );
+      newRevision = this._createRevision(transcriptId, {
+        state: incomingState,
+        isCurrent: makeCurrent,
+        runId,
+        segments: revisionSegments,
+        createdAt: ts,
       });
+
+      if (makeCurrent) {
+        this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
+        const insert = this.db.prepare(
+          `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+        );
+        revisionSegments.forEach((s, i) => {
+          insert.run(
+            s.segment_id,
+            transcriptId,
+            i,
+            s.start,
+            s.end,
+            s.speaker,
+            s.text,
+            s.original_text,
+            s.status,
+            s.confidence,
+            s.words ? JSON.stringify(s.words) : null
+          );
+        });
+      }
 
       const action = existing ? HISTORY_ACTIONS.TRANSCRIPT_SAVED : HISTORY_ACTIONS.TRANSCRIPTION_CREATED;
       this.db
@@ -655,7 +791,14 @@ class Storage {
           caseId,
           action,
           transcriptId,
-          JSON.stringify({ segmentCount: normalized.length, source, modelId: modelId ?? null }),
+          JSON.stringify({
+            segmentCount: revisionSegments.length,
+            source,
+            modelId: modelId ?? null,
+            revisionId: newRevision.revision_id,
+            revisionState: incomingState,
+            becameCurrent: makeCurrent,
+          }),
           ts
         );
       this.db.exec('COMMIT');
@@ -665,7 +808,151 @@ class Storage {
     }
 
     this._touchCase(caseId);
-    return { transcript: this.getTranscript(caseId, evidenceId), segments: this.getSegments(transcriptId) };
+    const current = this.getCurrentRevision(transcriptId);
+    return {
+      transcript: this.getTranscript(caseId, evidenceId),
+      segments: this.getSegments(transcriptId),
+      revision: this._describeRevision(newRevision),
+      currentRevision: current ? this._describeRevision(current) : null,
+      revisionBecameCurrent: makeCurrent,
+    };
+  }
+
+  /** Insert a revision row. Caller supplies the surrounding transaction. */
+  _createRevision(transcriptId, { state, isCurrent, runId = null, segments, createdAt }) {
+    const revisionId = makeId('REV');
+    if (isCurrent) {
+      this.db.prepare('UPDATE transcript_revisions SET is_current = 0 WHERE transcript_id = ?').run(transcriptId);
+    }
+    this.db
+      .prepare(
+        `INSERT INTO transcript_revisions(revision_id, transcript_id, run_id, state, is_current, created_at, segments_json)
+         VALUES(?,?,?,?,?,?,?)`
+      )
+      .run(revisionId, transcriptId, runId, state, isCurrent ? 1 : 0, createdAt, JSON.stringify(segments));
+    return {
+      revision_id: revisionId,
+      transcript_id: transcriptId,
+      run_id: runId,
+      state,
+      is_current: isCurrent ? 1 : 0,
+      created_at: createdAt,
+      segments_json: JSON.stringify(segments),
+    };
+  }
+
+  getCurrentRevision(transcriptId) {
+    return (
+      this.db
+        .prepare('SELECT * FROM transcript_revisions WHERE transcript_id = ? AND is_current = 1 ORDER BY created_at DESC LIMIT 1')
+        .get(transcriptId) || null
+    );
+  }
+
+  /** Current revision, shaped for callers (includes its segments). */
+  getCurrentRevisionInfo(transcriptId) {
+    return this._describeRevision(this.getCurrentRevision(transcriptId));
+  }
+
+  getRevision(revisionId) {
+    const row = this.db.prepare('SELECT * FROM transcript_revisions WHERE revision_id = ?').get(revisionId);
+    return row ? this._describeRevision(row) : null;
+  }
+
+  listRevisions(transcriptId) {
+    return this.db
+      .prepare('SELECT * FROM transcript_revisions WHERE transcript_id = ? ORDER BY created_at DESC, revision_id DESC')
+      .all(transcriptId)
+      .map((r) => this._describeRevision(r));
+  }
+
+  /**
+   * Make an existing revision current and restore its segments into the live
+   * transcript table. This is the explicit "use this version" action; it can
+   * bring back an older reviewed revision after a new machine run.
+   */
+  setCurrentRevision(revisionId) {
+    const revision = this.db.prepare('SELECT * FROM transcript_revisions WHERE revision_id = ?').get(revisionId);
+    if (!revision) {
+      const err = new Error('Revision not found.');
+      err.code = 'REVISION_NOT_FOUND';
+      throw err;
+    }
+    const transcriptId = revision.transcript_id;
+    const segments = JSON.parse(revision.segments_json);
+    const ts = nowIso();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('UPDATE transcript_revisions SET is_current = 0 WHERE transcript_id = ?').run(transcriptId);
+      this.db.prepare('UPDATE transcript_revisions SET is_current = 1 WHERE revision_id = ?').run(revisionId);
+      this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
+      const insert = this.db.prepare(
+        `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+      );
+      segments.forEach((s, i) => {
+        insert.run(
+          s.segment_id,
+          transcriptId,
+          i,
+          s.start,
+          s.end,
+          s.speaker || 'SPEAKER_01',
+          s.text,
+          s.original_text === undefined ? s.text : s.original_text,
+          s.status,
+          s.confidence === undefined ? null : s.confidence,
+          s.words ? JSON.stringify(s.words) : null
+        );
+      });
+      this.db
+        .prepare('UPDATE transcripts SET updated_at = ? WHERE transcript_id = ?')
+        .run(ts, transcriptId);
+      const transcript = this.db.prepare('SELECT * FROM transcripts WHERE transcript_id = ?').get(transcriptId);
+      this.db
+        .prepare('INSERT INTO history(case_id, action, target, detail_json, created_at) VALUES(?,?,?,?,?)')
+        .run(
+          transcript.case_id,
+          'REVISION_SET_CURRENT',
+          transcriptId,
+          JSON.stringify({ revisionId, state: revision.state, segmentCount: segments.length }),
+          ts
+        );
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    const current = this.getCurrentRevision(transcriptId);
+    const transcript = this.db.prepare('SELECT * FROM transcripts WHERE transcript_id = ?').get(transcriptId);
+    return {
+      transcript,
+      segments: this.getSegments(transcriptId),
+      currentRevision: this._describeRevision(current),
+    };
+  }
+
+  /** Shape a revision row for callers; `segments` is included when materialised. */
+  _describeRevision(row, { includeSegments = true } = {}) {
+    if (!row) return null;
+    let segments = null;
+    if (includeSegments && row.segments_json !== undefined) {
+      try {
+        segments = JSON.parse(row.segments_json);
+      } catch {
+        segments = [];
+      }
+    }
+    return {
+      revision_id: row.revision_id,
+      transcript_id: row.transcript_id,
+      run_id: row.run_id,
+      state: row.state,
+      is_current: Boolean(row.is_current),
+      created_at: row.created_at,
+      segment_count: segments ? segments.length : undefined,
+      segments,
+    };
   }
 
   /**
@@ -729,6 +1016,164 @@ class Storage {
     }));
   }
 
+  /**
+   * Restore a transcription run from a case archive. All provenance fields and
+   * timestamps are preserved; a fresh run id is generated so restoring the same
+   * archive twice can never collide. The caller supplies already-remapped
+   * evidence and transcript ids.
+   */
+  restoreTranscriptionRun(caseId, evidenceId, run, { transcriptId = null, runId = null } = {}) {
+    const id = runId || makeId('RUN');
+    this.db
+      .prepare(
+        `INSERT INTO transcription_runs(
+           run_id, case_id, evidence_id, transcript_id, status, error_code, input_sha256,
+           derived_sha256, engine, engine_version, model_id, model_sha256, vad, vad_model,
+           settings_json, runtime_mode, runtime_reason, app_version, started_at, finished_at
+         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        id,
+        caseId,
+        evidenceId,
+        transcriptId,
+        run.status,
+        run.error_code ?? null,
+        run.input_sha256 ?? null,
+        run.derived_sha256 ?? null,
+        run.engine ?? null,
+        run.engine_version ?? null,
+        run.model_id ?? null,
+        run.model_sha256 ?? null,
+        run.vad === undefined || run.vad === null ? null : run.vad ? 1 : 0,
+        run.vad_model ?? null,
+        run.settings_json ?? null,
+        run.runtime_mode ?? null,
+        run.runtime_reason ?? null,
+        run.app_version ?? null,
+        run.started_at,
+        run.finished_at ?? null
+      );
+    return id;
+  }
+
+  /**
+   * Replace a transcript's live segments with the supplied set. Used by the
+   * save, set-current-revision and archive-restore paths.
+   */
+  _replaceSegments(transcriptId, segments) {
+    this.db.prepare('DELETE FROM segments WHERE transcript_id = ?').run(transcriptId);
+    const insert = this.db.prepare(
+      `INSERT INTO segments(segment_id, transcript_id, ordinal, start_seconds, end_seconds, speaker, text, original_text, status, confidence, words_json)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+    );
+    segments.forEach((s, i) => {
+      insert.run(
+        s.segment_id,
+        transcriptId,
+        i,
+        s.start,
+        s.end,
+        s.speaker || 'SPEAKER_01',
+        s.text,
+        s.original_text === undefined || s.original_text === null ? s.text : s.original_text,
+        s.status,
+        s.confidence === undefined ? null : s.confidence,
+        s.words ? JSON.stringify(s.words) : null
+      );
+    });
+  }
+
+  /**
+   * Restore a transcript together with all of its revisions, preserving the
+   * revision states, the current marker and the original timestamps. Used by
+   * case-archive restore so a round-trip does not lose provenance. Run ids are
+   * remapped by the caller through `runIdMap` (old archive run id -> new run id).
+   *
+   * @returns {{transcript:object, currentRevision:object}}
+   */
+  restoreTranscript(caseId, evidenceId, transcript, revisions = [], { runIdMap = new Map(), transcriptId = null } = {}) {
+    const newTranscriptId = transcriptId || makeId('TRANSCRIPT');
+    const createdAt = transcript.created_at || nowIso();
+    const updatedAt = transcript.updated_at || createdAt;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO transcripts(transcript_id, case_id, evidence_id, language, model_id, engine, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,?,?)`
+        )
+        .run(
+          newTranscriptId,
+          caseId,
+          evidenceId,
+          transcript.language || 'tr',
+          transcript.model_id ?? null,
+          transcript.engine ?? null,
+          createdAt,
+          updatedAt
+        );
+
+      const ordered = [...revisions].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      let current = null;
+      for (const rev of ordered) {
+        const mappedRun = rev.run_id ? runIdMap.get(rev.run_id) || null : null;
+        const row = {
+          revision_id: makeId('REV'),
+          transcript_id: newTranscriptId,
+          run_id: mappedRun,
+          state: rev.state,
+          is_current: rev.is_current ? 1 : 0,
+          created_at: rev.created_at || createdAt,
+          segments_json: JSON.stringify(rev.segments || []),
+        };
+        this.db
+          .prepare(
+            `INSERT INTO transcript_revisions(revision_id, transcript_id, run_id, state, is_current, created_at, segments_json)
+             VALUES(?,?,?,?,?,?,?)`
+          )
+          .run(
+            row.revision_id,
+            row.transcript_id,
+            row.run_id,
+            row.state,
+            row.is_current,
+            row.created_at,
+            row.segments_json
+          );
+        if (row.is_current) current = row;
+      }
+      // Guarantee exactly one current revision. A legacy archive without an
+      // explicit current marker falls back to the newest revision.
+      if (!current && ordered.length) {
+        const newest = this.db
+          .prepare('SELECT * FROM transcript_revisions WHERE transcript_id = ? ORDER BY created_at DESC, revision_id DESC LIMIT 1')
+          .get(newTranscriptId);
+        this.db.prepare('UPDATE transcript_revisions SET is_current = 1 WHERE revision_id = ?').run(newest.revision_id);
+        current = newest;
+      }
+      if (current) {
+        this._replaceSegments(newTranscriptId, JSON.parse(current.segments_json));
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return {
+      transcript_id: newTranscriptId,
+      transcript: this.db.prepare('SELECT * FROM transcripts WHERE transcript_id = ?').get(newTranscriptId),
+      currentRevision: this._describeRevision(
+        this.db.prepare('SELECT * FROM transcript_revisions WHERE transcript_id = ? AND is_current = 1 LIMIT 1').get(newTranscriptId)
+      ),
+    };
+  }
+
+  /** Point a restored run at its restored transcript (provenance link). */
+  linkRunTranscript(runId, transcriptId) {
+    this.db.prepare('UPDATE transcription_runs SET transcript_id = ? WHERE run_id = ?').run(transcriptId, runId);
+  }
+
   listHistory(caseId) {
     const rows = this.db
       .prepare('SELECT * FROM history WHERE case_id = ? ORDER BY history_id DESC LIMIT 1000')
@@ -748,6 +1193,7 @@ class Storage {
       cases: count('SELECT COUNT(*) AS n FROM cases'),
       evidence: count('SELECT COUNT(*) AS n FROM evidence'),
       segments: count('SELECT COUNT(*) AS n FROM segments'),
+      revisions: count('SELECT COUNT(*) AS n FROM transcript_revisions'),
       schemaVersion: Number(
         this.db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get().value
       ),
@@ -802,4 +1248,12 @@ function normalizeSegments(segments) {
   return out;
 }
 
-module.exports = { Storage, sha256File, sanitizeFileName, makeId, normalizeSegments, SCHEMA_VERSION };
+module.exports = {
+  Storage,
+  sha256File,
+  sanitizeFileName,
+  makeId,
+  normalizeSegments,
+  statusSetToRevisionState,
+  SCHEMA_VERSION,
+};

@@ -51,6 +51,8 @@ const api = {
   transcript: {
     get: (caseId, evidenceId) => ipcRenderer.invoke(IPC.TRANSCRIPT_GET, caseId, evidenceId),
     save: (caseId, evidenceId, payload) => ipcRenderer.invoke(IPC.TRANSCRIPT_SAVE, caseId, evidenceId, payload),
+    revisions: (caseId, evidenceId) => ipcRenderer.invoke(IPC.TRANSCRIPT_REVISIONS, caseId, evidenceId),
+    setRevision: (revisionId) => ipcRenderer.invoke(IPC.TRANSCRIPT_SET_REVISION, revisionId),
   },
   transcribe: {
     start: (input) => ipcRenderer.invoke(IPC.TRANSCRIBE_START, input),
