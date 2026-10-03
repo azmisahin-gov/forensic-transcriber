@@ -31,7 +31,7 @@ function sha256Text(text) {
  *
  * @returns {Promise<Array<{format:string,path:string,bytes:number,sha256:string}>>}
  */
-async function runExport({ caseRecord, evidence, transcript, segments, language, modelId, engine, formats, outputDir, baseName }) {
+async function runExport({ caseRecord, evidence, transcript, segments, language, modelId, engine, revision, formats, outputDir, baseName }) {
   const dir = outputDir || path.join(caseRecord.case_dir, 'exports');
   fs.mkdirSync(dir, { recursive: true });
   // Two recordings in one case can share a file name, so the evidence id is
@@ -40,7 +40,7 @@ async function runExport({ caseRecord, evidence, transcript, segments, language,
   const evidenceStem = safeStem(baseName || (evidence && evidence.original_name) || caseRecord.case_id);
   const evidenceId = evidence && evidence.evidence_id ? evidence.evidence_id : null;
   const stem = evidenceId ? `${evidenceStem}__${evidenceId}` : evidenceStem;
-  const ctx = { caseRecord, evidence, transcript, segments, language, modelId, engine };
+  const ctx = { caseRecord, evidence, transcript, segments, language, modelId, engine, revision };
   const written = [];
   for (const format of formats) {
     const spec = FORMATS[format];

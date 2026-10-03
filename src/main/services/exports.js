@@ -37,7 +37,7 @@ function formatClock(seconds) {
   return `${pad(h)}:${pad(m)}:${pad(sec)}.${pad(ms, 3)}`;
 }
 
-function buildMeta({ caseRecord, evidence, transcript, segments, language, modelId, engine }) {
+function buildMeta({ caseRecord, evidence, transcript, segments, language, modelId, engine, revision }) {
   const humanEdited = segments.filter((s) => s.status !== SEGMENT_STATUS.AUTOMATIC).length;
   return {
     schema_version: TRANSCRIPT_SCHEMA_VERSION,
@@ -52,6 +52,16 @@ function buildMeta({ caseRecord, evidence, transcript, segments, language, model
     language: language || 'tr',
     engine: engine || null,
     model_id: modelId || null,
+    // Which stored transcript revision this export was rendered from. Lets a
+    // reader tie an exported file back to the exact snapshot of the work.
+    transcript_revision: revision
+      ? {
+          revision_id: revision.revision_id,
+          state: revision.state,
+          created_at: revision.created_at,
+          run_id: revision.run_id ?? null,
+        }
+      : null,
     segment_count: segments.length,
     human_reviewed_segment_count: humanEdited,
     transcript_status_note:
@@ -61,8 +71,8 @@ function buildMeta({ caseRecord, evidence, transcript, segments, language, model
   };
 }
 
-function toJson({ caseRecord, evidence, transcript, segments, language, modelId, engine }) {
-  const meta = buildMeta({ caseRecord, evidence, transcript, segments, language, modelId, engine });
+function toJson({ caseRecord, evidence, transcript, segments, language, modelId, engine, revision }) {
+  const meta = buildMeta({ caseRecord, evidence, transcript, segments, language, modelId, engine, revision });
   return JSON.stringify(
     {
       ...meta,
@@ -88,8 +98,8 @@ function toJson({ caseRecord, evidence, transcript, segments, language, modelId,
   );
 }
 
-function toTxt({ caseRecord, evidence, segments, language, modelId, engine }) {
-  const meta = buildMeta({ caseRecord, evidence, transcript: null, segments, language, modelId, engine });
+function toTxt({ caseRecord, evidence, segments, language, modelId, engine, revision }) {
+  const meta = buildMeta({ caseRecord, evidence, transcript: null, segments, language, modelId, engine, revision });
   const lines = [];
   lines.push('FORENSIC TRANSCRIBER — TRANSCRIPT (working draft)');
   lines.push('='.repeat(60));
@@ -105,6 +115,7 @@ function toTxt({ caseRecord, evidence, segments, language, modelId, engine }) {
     }
   }
   lines.push(`Language: ${language || 'tr'}   Engine: ${engine || 'n/a'}   Model: ${modelId || 'n/a'}`);
+  if (revision) lines.push(`Transcript revision: ${revision.revision_id} (${revision.state})`);
   lines.push(`Generated: ${meta.generated_at}`);
   lines.push('');
   lines.push('AUTOMATIC segments are machine output, not expert opinion.');
@@ -134,8 +145,8 @@ function toSrt({ segments }) {
   return `${blocks.join('\n\n')}\n`;
 }
 
-function toHtml({ caseRecord, evidence, segments, language, modelId, engine }) {
-  const meta = buildMeta({ caseRecord, evidence, transcript: null, segments, language, modelId, engine });
+function toHtml({ caseRecord, evidence, segments, language, modelId, engine, revision }) {
+  const meta = buildMeta({ caseRecord, evidence, transcript: null, segments, language, modelId, engine, revision });
   const rows = segments
     .map((s) => {
       const cls = s.status.toLowerCase();
@@ -152,6 +163,7 @@ function toHtml({ caseRecord, evidence, segments, language, modelId, engine }) {
     evidence ? `Evidence ${escapeHtml(evidence.original_name)}` : '',
     evidence ? `SHA-256 ${escapeHtml(evidence.sha256)}` : '',
     `Language ${escapeHtml(language || 'tr')} · Engine ${escapeHtml(engine || 'n/a')} · Model ${escapeHtml(modelId || 'n/a')}`,
+    revision ? `Transcript revision ${escapeHtml(revision.revision_id)} (${escapeHtml(revision.state)})` : '',
   ]
     .filter(Boolean)
     .map((l) => `      <p>${l}</p>`)
