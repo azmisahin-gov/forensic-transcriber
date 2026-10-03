@@ -45,9 +45,60 @@ ignores the picture entirely.
 ## Automatic output is not expert output
 
 The application never presents machine output as an expert conclusion. Every
-segment carries a status (`AUTOMATIC`, `REVIEWED`, `EDITED`, `VERIFIED`), the
-automatic text is preserved in undo history when it is edited, and exports state
-the machine/expert distinction explicitly.
+segment carries a status (`AUTOMATIC`, `REVIEWED`, `EDITED`, `VERIFIED`).
+
+The **automatic text is stored permanently** in `segments.original_text`. It is
+written once when the transcript is created and is never overwritten, so an
+expert edit cannot destroy what the engine produced — not on save, not after
+closing and reopening the case. The JSON export includes `original_text` for any
+segment where it differs from the current text.
+
+## 56.12 capability audit
+
+Checked against the definition of 56.12 ("Ses Kayıtlarının Metin Haline
+Dönüştürülmesi — Yargı mercilerince ses ve görüntü bilişim sisteminin
+kullanılması hariç").
+
+### Present and verified
+
+| Capability | Where |
+| --- | --- |
+| Original recording preserved, never modified | Import copies the file; the original is only read |
+| SHA-256 of the imported copy | `evidence.sha256`, computed on the copy |
+| Technical metadata recorded | container, codec, duration, sample rate, channels, bit depth |
+| Transcript tied to the original timeline | `start`/`end` in seconds on the original recording |
+| Segment-level audio ↔ text verification | click a line to play exactly that region |
+| Machine vs human output kept distinct | `AUTOMATIC` / `REVIEWED` / `EDITED` / `VERIFIED`, plus `original_text` |
+| Automatic text never destroyed by editing | `segments.original_text`, never overwritten |
+| Unclear speech marked, not invented | `[ANLAŞILAMADI]` placeholder |
+| Speaker labels, not identification | `SPEAKER_01…`; never resolved to a name |
+| Export does not imply an automatic conclusion | every export states the machine/expert status |
+| Original vs derived working copy separated | `evidence/original/` vs `evidence/derived/` |
+| Provenance and action history | `history` table surfaced in the case |
+| Exported transcript traceable to case/evidence/version | JSON carries case, evidence and hash |
+
+### Category A — 56.12 blockers (fixed in this pass)
+
+1. **Renderer crashed on startup in v0.1.1**, so none of the above was reachable.
+2. **An expert edit destroyed the automatic transcript** after save.
+
+### Category B — important usability gaps (not blockers)
+
+1. **A segment cannot be marked explicitly as inaudible versus unintelligible.**
+   Both currently reduce to `[ANLAŞILAMADI]`. An expert may want to record
+   "no audible speech" separately from "speech present but unclear".
+2. **Overlapping / simultaneous speech cannot be marked.** There is no way to
+   flag a segment as containing two speakers at once.
+3. **The history shows actions, not a field-level diff.** It records that a
+   transcript was saved, not which words changed.
+4. **No free-text note per segment** for an expert's reasoning.
+
+### Category C — out of scope for 56.12 (do not add)
+
+Speaker identification, voice comparison, deepfake/manipulation detection,
+emotion or sentiment analysis, lie detection, threat or crime classification,
+legal interpretation, automatic legal roles, video-frame analysis. These belong
+to 56.11 or other specialties.
 
 ## Legal position
 
