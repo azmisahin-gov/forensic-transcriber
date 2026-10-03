@@ -1,8 +1,71 @@
 # Project state
 
-CURRENT_PHASE: P12 — trust/revision hardening
+CURRENT_PHASE: P13 — 56.12 expert work-station productization
 CURRENT_STATUS: IN PROGRESS — code and tests complete in this environment; packaged/Windows verification outstanding
 LAST_UPDATED: 2026-10-03
+
+## P13 — expert work-station productization (unreleased)
+
+Scope: additively extend the working v0.1.x product toward a 56.12 expert work
+station (case intake, dashboard, notes, reports, delivery package, support
+bundle, review aids) **without** breaking the P12 trust/revision invariants and
+without any new runtime dependency. The offline-first guarantee is unchanged.
+
+Implemented:
+
+- **Case intake / dashboard.** `cases` carries the assignment fields
+  (`file_number`, `authority`, `case_type`, `assignment_date`, `due_date`,
+  `assignment_description`, `requested_questions`, `scope`); `caseDashboard()`
+  derives live counts (evidence, transcribed, reviewed, verified, unclear,
+  failed runs, notes, revisions, missing assignment fields). Rendered in a case
+  overview panel with an assignment editor.
+- **Notes / bookmarks.** Per-case (optionally per-evidence, time-anchored) notes
+  with categories, editable and deletable, stored locally only.
+- **Review aids.** Per-segment operator flags (`UNCLEAR`/`REVISIT`/`REVIEW`,
+  `segments.flags_json`) that never change status or text; a transcript filter
+  (unclear / unreviewed / low-confidence) and in-transcript search highlighting;
+  F2 edit and F3 flag shortcuts. Pure helpers live in `src/renderer/lib/search.js`
+  and `src/renderer/lib/shortcuts.js` and are unit-tested without a DOM.
+- **Reports.** Parametric, Ministry-of-Justice-shaped section templates with
+  automatic population from verified case data, a data-integrity verdict and a
+  delivery-readiness checklist carried into TXT, HTML, DOCX and PDF; a
+  technical-work-product disclaimer (no legal assessment is generated).
+- **Delivery package and support bundle.** One delivery package (report,
+  transcripts, metadata, per-file hashes, source revision per file) and a local,
+  redacted support bundle containing no transcript text, audio or evidence.
+- **Business-case self-test.** `--business-case-test` drives the whole expert
+  workflow (intake → import → transcribe → edit → delivery → report → archive →
+  restore → integrity) through the real services with a deterministic injected
+  ASR adapter (no model), and also asserts a mid-run failure closes the run as
+  `FAILED` and a later machine run does not displace the verified human revision.
+
+### Verified in this environment (P13)
+
+- `npm test` → 200 tests, 200 pass, 0 fail (unit + integration; FFmpeg 7.1.5
+  present).
+- `npm run lint` → Lint OK — 63 files.
+- `node scripts/security-check.js` → 0 critical findings.
+- `tests/unit/productization.test.js` → 12 tests, all passing, exercising real
+  Storage/report/archive/delivery/support code and the real renderer libs.
+- **Acceptance self-test (source launch, not the packaged binary):** the existing
+  `release/linux-unpacked` binary predates these changes and was **not** rebuilt;
+  the acceptance run used the current source via `electron .`:
+  `FT_DATA_DIR=/tmp/ft-data-acc FT_MODELS_DIR=…/models xvfb-run -a
+  ./node_modules/.bin/electron . --acceptance-test --no-sandbox` → **51/51 steps
+  passed**. New UI steps assert the dashboard renders live counts, per-segment
+  flags + filter + highlight work, and the notes and report-checklist panels open
+  and populate. Real model `ggml-large-v3-turbo-q5_0.bin` + VAD
+  `ggml-silero-v5.1.2.bin`.
+
+### Not verified in this environment (P13)
+
+- **Packaged build / installer (incl. Windows):** neither the Linux nor the
+  Windows installer was rebuilt or launched here; `npm run verify:release` was
+  not run (its packaged smoke/acceptance gates would use the stale binary) →
+  **NOT VERIFIED**.
+- **GPU:** not verified on target NVIDIA hardware (no RTX 3060 here).
+- **Long-recording memory (1/4/8 h):** the waveform path stays O(buckets); no
+  multi-hour recording was measured here.
 
 ## P12 — trust/revision hardening (unreleased)
 

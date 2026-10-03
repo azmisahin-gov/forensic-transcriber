@@ -22,6 +22,18 @@ build environment.
 
 Command: `node --test tests/unit/*.test.js`
 
+Result (2026-10-03, P13 productization): **`node --test tests/unit/*.test.js`
+= 169 passed, 0 failed; full `npm test` (unit + integration) = 200 passed,
+0 failed.**
+
+The P13 work-station pass added `tests/unit/productization.test.js` (12 tests:
+review-flag persistence and `TranscriptStore.toggleFlag`, the search/shortcut
+helpers, the data-integrity verdict and delivery checklist in every report
+format, delivery-package provenance, the support bundle, and a real
+run1 → human edit → run2 product-flow assertion). It runs real
+Storage/report/archive/delivery/support code and the real renderer libs, not
+mocks.
+
 Result (2026-10-03, P12 hardening): **157 passed, 0 failed.**
 
 The P12 hardening added `tests/unit/p0-revision-lifecycle.test.js` (run
@@ -180,8 +192,18 @@ FT_DATA_DIR=... FT_MODELS_DIR=... xvfb-run -a \
   --acceptance-model large-v3-turbo-q5_0 --no-sandbox
 ```
 
-Result (2026-10-03, P12, real `ggml-large-v3-turbo-q5_0.bin`): `{"ok":true, ...}`
-— **47/47 steps.** The P0-critical steps:
+Result (2026-10-03, P13, real `ggml-large-v3-turbo-q5_0.bin`, run against the
+current source because the packaged binary was not rebuilt): `{"ok":true, ...}`
+— **51/51 steps** (P12 was 47/47). The four added P13 steps:
+
+| Step | Result |
+| --- | --- |
+| Case dashboard shows live counts | ok |
+| Flags + filter + search highlight work | ok |
+| Notes panel adds a note | ok |
+| Report checklist renders through the UI | ok |
+
+The P0-critical steps unchanged from P12:
 
 | Step | Result |
 | --- | --- |
@@ -205,6 +227,21 @@ Result (2026-10-03, P12, real `ggml-large-v3-turbo-q5_0.bin`): `{"ok":true, ...}
 | Restored evidence count + hashes match | ok |
 | Evidence re-verification OK / database health ok | ok |
 | Transcription run provenance + input/model hashes recorded | ok |
+
+### Business-case self-test
+
+Command:
+```
+FT_DATA_DIR=... xvfb-run -a ./node_modules/.bin/electron . \
+  --business-case-test --no-sandbox
+```
+
+Result (2026-10-03, P13): `{"ok":true, ...}` — **26/26 steps**, no speech model
+(a deterministic injected ASR adapter exercises the real storage/revision
+code). Covers intake → import → transcribe → expert edit → delivery package →
+report export → archive → restore → integrity re-verification, plus a
+mid-transcription failure closing the run as `FAILED` and a later machine run
+not displacing the verified human revision.
 
 ## 6. Windows x64 runtime
 
