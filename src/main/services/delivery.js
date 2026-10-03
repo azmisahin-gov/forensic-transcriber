@@ -204,11 +204,89 @@ async function writeDeliveryPackage(args) {
   return { path: args.destPath, sha256: sha256Buffer(buffer), bytes: buffer.length, manifest };
 }
 
+/**
+ * Prepare a local hand-off folder (report + transcripts) laid out for manual
+ * submission through the UYAP workflow. This only writes files to a folder the
+ * user picks; nothing is uploaded and the software makes no claim that a filing
+ * is legally valid or accepted. A manifest records the transcript revision each
+ * transcript file was rendered from, so the hand-off stays traceable.
+ *
+ * @returns {Promise<{dir:string, files:Array, manifest:object}>}
+ */
+async function prepareUyapPackage({ storage, caseId, options = {}, engineInfo = null }) {
+  const kase = storage.getCase(caseId);
+  if (!kase) {
+    const err = new Error(`Case not found: ${caseId}`);
+    err.code = 'CASE_NOT_FOUND';
+    throw err;
+  }
+  const dir = options.outputDir || path.join(kase.case_dir, 'exports', 'uyap');
+  fs.mkdirSync(path.join(dir, 'rapor'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'transkript'), { recursive: true });
+
+  const evidence = storage.listEvidence(caseId);
+  const notes = storage.listNotes(caseId);
+  const report = storage.getReport(caseId);
+  const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
+
+  const files = [];
+  const write = (rel, data) => {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
+    const full = path.join(dir, rel);
+    writeFileAtomic(full, buf, { fsync: true });
+    files.push({ path: rel, bytes: buf.length, sha256: sha256Buffer(buf) });
+  };
+
+  const built = reports.buildReport({ caseRecord: kase, evidence, transcripts, notes, engineInfo, report });
+  write('rapor/rapor.txt', reports.reportToTxt(built));
+  write('rapor/rapor.html', reports.reportToHtml(built));
+  write('rapor/rapor.docx', reportToDocx(built));
+  write('rapor/rapor.pdf', reportToPdf(built));
+
+  for (const t of transcripts) {
+    const stem = `${safeStem(t.evidence_name)}__${t.evidence_id}`;
+    write(`transkript/${stem}.json`, `${JSON.stringify({
+      evidence_id: t.evidence_id,
+      evidence_name: t.evidence_name,
+      transcript_id: t.transcript_id,
+      revision: t.revision,
+      segments: t.segments,
+    }, null, 2)}\n`);
+    const srt = t.segments
+      .map((s, i) => `${i + 1}\n${srtTime(s.start)} --> ${srtTime(s.end)}\n[${s.speaker}] ${s.text}\n`)
+      .join('\n');
+    write(`transkript/${stem}.srt`, `${srt}\n`);
+  }
+
+  const manifest = {
+    format: 'forensic-transcriber-uyap-handoff',
+    version: 1,
+    case_id: caseId,
+    case_title: kase.title,
+    generated_at: new Date().toISOString(),
+    // Not a legal claim: this is a local hand-off folder. The expert submits it
+    // through their own official workflow.
+    note: 'Local hand-off folder prepared for manual submission. Not a legal filing.',
+    transcripts: transcripts.map((t) => ({
+      evidence_id: t.evidence_id,
+      transcript_id: t.transcript_id,
+      revision_id: t.revision ? t.revision.revision_id : null,
+      revision_state: t.revision ? t.revision.state : null,
+    })),
+    files,
+  };
+  write('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+
+  storage.recordHistory(caseId, 'UYAP_PACKAGE', caseId, { dir, fileCount: files.length });
+  return { dir, files, manifest };
+}
+
 module.exports = {
   DELIVERY_FORMAT,
   DELIVERY_VERSION,
   buildDeliveryPackage,
   writeDeliveryPackage,
+  prepareUyapPackage,
   sha256Buffer,
   safeStem,
 };

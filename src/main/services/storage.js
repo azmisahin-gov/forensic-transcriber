@@ -10,10 +10,11 @@ const {
   SEGMENT_STATUS,
   SEGMENT_STATUS_VALUES,
   REVISION_STATE,
+  REPORT_REVISION_STATE,
   UNCLEAR_PLACEHOLDER,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 // Assignable case metadata (56.12 görevlendirme / intake). Free text, no legal
 // interpretation is derived from it. Stored on the case row so a case is
@@ -198,6 +199,8 @@ class Storage {
     this._migrateSegmentsFlags();
     this._migrateEvidenceAudioStreamCount();
     this._migrateCaseAssignment();
+    this._migrateReportsColumns();
+    this._ensureSearchIndex();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
@@ -370,6 +373,10 @@ class Storage {
         template TEXT NOT NULL DEFAULT 'generic',
         title TEXT NOT NULL DEFAULT '',
         sections_json TEXT NOT NULL DEFAULT '[]',
+        questions_json TEXT NOT NULL DEFAULT '[]',
+        sources_json TEXT NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL DEFAULT 'DRAFT',
+        current_revision_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -394,6 +401,45 @@ class Storage {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_diagnostics_created ON diagnostics(created_at);
+
+      -- Append-only report revisions. The working report row in reports holds
+      -- the current draft; each save appends an immutable snapshot here so a
+      -- FINAL revision can never be silently overwritten. A report revision also
+      -- records the transcript revisions it cites, so an exported report is
+      -- traceable to the exact transcript snapshots behind it.
+      CREATE TABLE IF NOT EXISTS report_revisions (
+        revision_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        state TEXT NOT NULL,
+        is_current INTEGER NOT NULL DEFAULT 0,
+        template TEXT,
+        title TEXT,
+        sections_json TEXT NOT NULL DEFAULT '[]',
+        questions_json TEXT NOT NULL DEFAULT '[]',
+        sources_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_report_revisions_case ON report_revisions(case_id, created_at);
+
+      -- Structured findings: an observation the operator records with an
+      -- explicit source (material, revision, timestamp). A finding can be
+      -- promoted into the report, keeping the source link intact. A finding is
+      -- the expert's own note, never an automated conclusion.
+      CREATE TABLE IF NOT EXISTS findings (
+        finding_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        observation TEXT NOT NULL DEFAULT '',
+        evidence_id TEXT,
+        revision_id TEXT,
+        at_seconds REAL,
+        speaker TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_findings_case ON findings(case_id, created_at);
     `);
 
     this._migrateSegmentsOriginalText();
@@ -401,6 +447,7 @@ class Storage {
     this._migrateSegmentsFlags();
     this._migrateEvidenceAudioStreamCount();
     this._migrateCaseAssignment();
+    this._ensureSearchIndex();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
@@ -443,6 +490,151 @@ class Storage {
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
+    }
+  }
+
+  /**
+   * Schema migration: add the structured-report columns (questions, sources,
+   * state, current revision) to databases created before the report workspace
+   * existed. Existing reports keep their sections and read as a DRAFT with no
+   * revision yet; the next save appends the first revision.
+   */
+  _migrateReportsColumns() {
+    const columns = this.db.prepare('PRAGMA table_info(reports)').all().map((c) => c.name);
+    if (!columns.length) return;
+    const wanted = [
+      ['questions_json', "TEXT NOT NULL DEFAULT '[]'"],
+      ['sources_json', "TEXT NOT NULL DEFAULT '[]'"],
+      ['state', "TEXT NOT NULL DEFAULT 'DRAFT'"],
+      ['current_revision_id', 'TEXT'],
+    ];
+    const missing = wanted.filter(([name]) => !columns.includes(name));
+    if (!missing.length) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const [name, type] of missing) {
+        this.db.exec(`ALTER TABLE reports ADD COLUMN ${name} ${type}`);
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Create the FTS5 search index when the bundled SQLite supports it. The index
+   * is optional: if FTS5 is missing, `this.ftsAvailable` stays false and the
+   * search path falls back to an indexed LIKE query, so search still works (just
+   * without ranked full-text matching). The feature is never allowed to break
+   * database creation.
+   */
+  _ensureSearchIndex() {
+    this.ftsAvailable = false;
+    try {
+      this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+        kind UNINDEXED,
+        ref_id UNINDEXED,
+        case_id UNINDEXED,
+        evidence_id UNINDEXED,
+        transcript_id UNINDEXED,
+        start_seconds UNINDEXED,
+        speaker,
+        body,
+        tokenize = 'unicode61 remove_diacritics 2'
+      );`);
+      this.ftsAvailable = true;
+    } catch {
+      this.ftsAvailable = false;
+    }
+  }
+
+  /** Drop and rebuild the FTS index for one case from the source tables. */
+  rebuildSearchIndex(caseId) {
+    if (!this.ftsAvailable) return false;
+    const evidence = this.listEvidence(caseId);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM search_fts WHERE case_id = ?').run(caseId);
+      const insert = this.db.prepare(
+        `INSERT INTO search_fts(kind, ref_id, case_id, evidence_id, transcript_id, start_seconds, speaker, body)
+         VALUES(?,?,?,?,?,?,?,?)`
+      );
+      for (const ev of evidence) {
+        insert.run('evidence', ev.evidence_id, caseId, ev.evidence_id, null, null, '', ev.original_name || '');
+        const t = this.getTranscript(caseId, ev.evidence_id);
+        if (!t) continue;
+        for (const s of this.getSegments(t.transcript_id)) {
+          insert.run('segment', s.segment_id, caseId, ev.evidence_id, t.transcript_id, s.start, s.speaker || '', s.text || '');
+        }
+      }
+      for (const n of this.listNotes(caseId)) {
+        insert.run(n.kind === 'BOOKMARK' ? 'bookmark' : 'note', n.note_id, caseId, n.evidence_id || null, null, n.at_seconds, '', n.body || '');
+      }
+      for (const f of this.listFindings(caseId)) {
+        insert.run('finding', f.finding_id, caseId, f.evidence_id || null, null, f.at_seconds, f.speaker || '', `${f.title || ''} ${f.description || ''} ${f.observation || ''}`.trim());
+      }
+      this.db.exec('COMMIT');
+      return true;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      return false;
+    }
+  }
+
+  /** Upsert one non-segment document (evidence name, note, bookmark, finding). */
+  _indexDoc({ kind, refId, caseId, evidenceId = null, transcriptId = null, start = null, speaker = '', body = '' }) {
+    if (!this.ftsAvailable) return;
+    try {
+      this.db.prepare('DELETE FROM search_fts WHERE kind = ? AND ref_id = ?').run(kind, refId);
+      this.db
+        .prepare(
+          `INSERT INTO search_fts(kind, ref_id, case_id, evidence_id, transcript_id, start_seconds, speaker, body)
+           VALUES(?,?,?,?,?,?,?,?)`
+        )
+        .run(kind, refId, caseId, evidenceId, transcriptId, start, speaker || '', body || '');
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  _unindex(kind, refId) {
+    if (!this.ftsAvailable) return;
+    try {
+      this.db.prepare('DELETE FROM search_fts WHERE kind = ? AND ref_id = ?').run(kind, refId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Refresh a single segment's FTS row (kept in sync on transcript save). */
+  _indexSegment({ caseId, evidenceId, transcriptId, segment }) {
+    if (!this.ftsAvailable) return;
+    try {
+      this.db
+        .prepare('DELETE FROM search_fts WHERE kind = ? AND ref_id = ?')
+        .run('segment', segment.segment_id);
+      this.db
+        .prepare(
+          `INSERT INTO search_fts(kind, ref_id, case_id, evidence_id, transcript_id, start_seconds, speaker, body)
+           VALUES(?,?,?,?,?,?,?,?)`
+        )
+        .run('segment', segment.segment_id, caseId, evidenceId, transcriptId, segment.start, segment.speaker || '', segment.text || '');
+    } catch {
+      /* index is best-effort; search falls back to LIKE */
+    }
+  }
+
+  /** Replace a whole transcript's FTS rows (used when a transcript is rewritten). */
+  _reindexTranscript(caseId, evidenceId, transcriptId) {
+    if (!this.ftsAvailable) return;
+    try {
+      this.db.prepare('DELETE FROM search_fts WHERE transcript_id = ?').run(transcriptId);
+      for (const s of this.getSegments(transcriptId)) {
+        this._indexSegment({ caseId, evidenceId, transcriptId, segment: s });
+      }
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -643,23 +835,52 @@ class Storage {
       err.code = 'CASE_NOT_FOUND';
       throw err;
     }
-    const evidence = this.listEvidence(caseId);
+    // Every count is computed by SQL aggregate over the case's own rows, so the
+    // dashboard is O(1) in renderer memory and stays fast for a case with 100+
+    // media files and tens of thousands of segments. No segment objects are
+    // loaded here.
     const one = (sql, ...args) => Number(this.db.prepare(sql).get(...args).n);
-    let transcribed = 0;
-    let reviewed = 0;
-    let verified = 0;
-    let unclear = 0;
-    let segmentsTotal = 0;
-    for (const ev of evidence) {
-      const t = this.getTranscript(caseId, ev.evidence_id);
-      if (!t) continue;
-      transcribed += 1;
-      const segs = this.getSegments(t.transcript_id);
-      segmentsTotal += segs.length;
-      if (segs.length && segs.every((s) => s.status === SEGMENT_STATUS.VERIFIED)) verified += 1;
-      else if (segs.some((s) => s.status === SEGMENT_STATUS.REVIEWED || s.status === SEGMENT_STATUS.EDITED || s.status === SEGMENT_STATUS.VERIFIED)) reviewed += 1;
-      unclear += segs.filter((s) => s.status === SEGMENT_STATUS.AUTOMATIC && s.text === UNCLEAR_PLACEHOLDER).length;
-    }
+
+    const evidence = one('SELECT COUNT(*) AS n FROM evidence WHERE case_id = ?', caseId);
+    const transcribed = one(
+      `SELECT COUNT(*) AS n FROM transcripts WHERE case_id = ?`,
+      caseId
+    );
+    const segments = one(
+      `SELECT COUNT(*) AS n FROM segments s JOIN transcripts t ON t.transcript_id = s.transcript_id WHERE t.case_id = ?`,
+      caseId
+    );
+    const unclear = one(
+      `SELECT COUNT(*) AS n FROM segments s JOIN transcripts t ON t.transcript_id = s.transcript_id
+        WHERE t.case_id = ? AND s.status = ? AND s.text = ?`,
+      caseId,
+      SEGMENT_STATUS.AUTOMATIC,
+      UNCLEAR_PLACEHOLDER
+    );
+    // A transcript counts as fully verified when it has at least one segment and
+    // none of its segments is below VERIFIED.
+    const verified = one(
+      `SELECT COUNT(*) AS n FROM (
+         SELECT s.transcript_id, COUNT(*) AS total,
+                SUM(CASE WHEN s.status = 'VERIFIED' THEN 1 ELSE 0 END) AS verified_count
+           FROM segments s JOIN transcripts t ON t.transcript_id = s.transcript_id
+          WHERE t.case_id = ?
+          GROUP BY s.transcript_id
+       ) WHERE total > 0 AND verified_count = total`,
+      caseId
+    );
+    const reviewed = one(
+      `SELECT COUNT(*) AS n FROM (
+         SELECT s.transcript_id, COUNT(*) AS total,
+                SUM(CASE WHEN s.status IN ('REVIEWED','EDITED','VERIFIED') THEN 1 ELSE 0 END) AS human_count,
+                SUM(CASE WHEN s.status = 'VERIFIED' THEN 1 ELSE 0 END) AS verified_count
+           FROM segments s JOIN transcripts t ON t.transcript_id = s.transcript_id
+          WHERE t.case_id = ?
+          GROUP BY s.transcript_id
+       ) WHERE human_count > 0 AND NOT (total > 0 AND verified_count = total)`,
+      caseId
+    );
+
     const failedRuns = one(
       `SELECT COUNT(*) AS n FROM transcription_runs WHERE case_id = ? AND status = 'FAILED'`,
       caseId
@@ -674,20 +895,22 @@ class Storage {
       title: kase.title,
       due_date: kase.due_date || null,
       updated_at: kase.updated_at,
-      evidence: evidence.length,
+      evidence,
       transcribed,
       reviewed,
       verified,
-      pending: evidence.length - transcribed,
-      segments: segmentsTotal,
+      pending: evidence - transcribed,
+      segments,
       unclear_segments: unclear,
       failed_runs: failedRuns,
       notes: one('SELECT COUNT(*) AS n FROM notes WHERE case_id = ?', caseId),
+      findings: one('SELECT COUNT(*) AS n FROM findings WHERE case_id = ?', caseId),
       revisions: one(
         `SELECT COUNT(*) AS n FROM transcript_revisions r
            JOIN transcripts t ON t.transcript_id = r.transcript_id WHERE t.case_id = ?`,
         caseId
       ),
+      report_revisions: one('SELECT COUNT(*) AS n FROM report_revisions WHERE case_id = ?', caseId),
       deliveries: one(
         `SELECT COUNT(*) AS n FROM history WHERE case_id = ? AND action IN ('DELIVERY_PACKAGE','DELIVERY_CREATED')`,
         caseId
@@ -791,6 +1014,7 @@ class Storage {
     }
 
     this._touchCase(caseId);
+    this._indexDoc({ kind: 'evidence', refId: evidenceId, caseId, evidenceId, body: originalName });
     return this.getEvidence(evidenceId);
   }
 
@@ -821,6 +1045,7 @@ class Storage {
         /* best effort */
       }
     }
+    this._unindex('evidence', evidenceId);
     this._touchCase(ev.case_id);
     return true;
   }
@@ -833,11 +1058,8 @@ class Storage {
     );
   }
 
-  getSegments(transcriptId) {
-    const rows = this.db
-      .prepare('SELECT * FROM segments WHERE transcript_id = ? ORDER BY ordinal ASC')
-      .all(transcriptId);
-    return rows.map((r) => ({
+  _describeSegment(r) {
+    return {
       segment_id: r.segment_id,
       ordinal: Number(r.ordinal),
       start: Number(r.start_seconds),
@@ -849,7 +1071,54 @@ class Storage {
       confidence: r.confidence === null ? null : Number(r.confidence),
       words: r.words_json ? JSON.parse(r.words_json) : null,
       flags: r.flags_json ? JSON.parse(r.flags_json) : [],
-    }));
+    };
+  }
+
+  getSegments(transcriptId) {
+    const rows = this.db
+      .prepare('SELECT * FROM segments WHERE transcript_id = ? ORDER BY ordinal ASC')
+      .all(transcriptId);
+    return rows.map((r) => this._describeSegment(r));
+  }
+
+  /**
+   * Total number of segments in a transcript, computed by SQL COUNT so the
+   * renderer can size a virtualised list without loading every segment.
+   */
+  countSegments(transcriptId) {
+    return Number(this.db.prepare('SELECT COUNT(*) AS n FROM segments WHERE transcript_id = ?').get(transcriptId).n);
+  }
+
+  /**
+   * Return one window of a transcript for virtualised rendering. The window is
+   * fetched by ordinal range so only the visible rows (plus a small buffer) ever
+   * leave the database, and scrolling a 10k-segment transcript stays cheap.
+   *
+   * @param {string} transcriptId
+   * @param {{offset?:number, limit?:number}} opts
+   * @returns {{total:number, offset:number, limit:number, segments:Array}}
+   */
+  getSegmentPage(transcriptId, { offset = 0, limit = 200 } = {}) {
+    const total = this.countSegments(transcriptId);
+    const lim = Math.max(1, Math.min(1000, Number(limit) || 200));
+    const off = Math.max(0, Math.min(total, Number(offset) || 0));
+    const rows = this.db
+      .prepare('SELECT * FROM segments WHERE transcript_id = ? ORDER BY ordinal ASC LIMIT ? OFFSET ?')
+      .all(transcriptId, lim, off);
+    return { total, offset: off, limit: lim, segments: rows.map((r) => this._describeSegment(r)) };
+  }
+
+  /**
+   * Return the single segment that contains a given timestamp (the last segment
+   * whose start is <= t). Used to locate the transcript from a waveform click
+   * without loading the whole transcript.
+   */
+  getSegmentAt(transcriptId, atSeconds) {
+    const t = Number(atSeconds) || 0;
+    const row = this.db
+      .prepare('SELECT * FROM segments WHERE transcript_id = ? AND start_seconds <= ? ORDER BY start_seconds DESC LIMIT 1')
+      .get(transcriptId, t);
+    return row ? this._describeSegment(row) : null;
   }
 
   /**
@@ -1008,6 +1277,8 @@ class Storage {
     }
 
     this._touchCase(caseId);
+    // Keep the full-text index aligned with what is now the visible text.
+    if (makeCurrent) this._reindexTranscript(caseId, evidenceId, transcriptId);
     const current = this.getCurrentRevision(transcriptId);
     return {
       transcript: this.getTranscript(caseId, evidenceId),
@@ -1298,6 +1569,7 @@ class Storage {
     const newTranscriptId = transcriptId || makeId('TRANSCRIPT');
     const createdAt = transcript.created_at || nowIso();
     const updatedAt = transcript.updated_at || createdAt;
+    const revisionIdMap = new Map();
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db
@@ -1329,6 +1601,7 @@ class Storage {
           created_at: rev.created_at || createdAt,
           segments_json: JSON.stringify(rev.segments || []),
         };
+        if (rev.revision_id) revisionIdMap.set(rev.revision_id, row.revision_id);
         this.db
           .prepare(
             `INSERT INTO transcript_revisions(revision_id, transcript_id, run_id, state, is_current, created_at, segments_json)
@@ -1368,12 +1641,149 @@ class Storage {
       currentRevision: this._describeRevision(
         this.db.prepare('SELECT * FROM transcript_revisions WHERE transcript_id = ? AND is_current = 1 LIMIT 1').get(newTranscriptId)
       ),
+      revisionIdMap,
     };
   }
 
   /** Point a restored run at its restored transcript (provenance link). */
   linkRunTranscript(runId, transcriptId) {
     this.db.prepare('UPDATE transcription_runs SET transcript_id = ? WHERE run_id = ?').run(transcriptId, runId);
+  }
+
+  /**
+   * Restore a note/bookmark row preserving its original timestamp. Used by
+   * case-archive restore so operator notes survive a round-trip. The evidence
+   * id is remapped by the caller (archive evidence id -> new evidence id).
+   */
+  restoreNote(caseId, note, { evidenceId = null } = {}) {
+    const noteId = makeId('NOTE');
+    const ts = note.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO notes(note_id, case_id, evidence_id, at_seconds, kind, category, body, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        noteId,
+        caseId,
+        evidenceId,
+        note.at_seconds === null || note.at_seconds === undefined ? null : Number(note.at_seconds),
+        String(note.kind || 'NOTE'),
+        note.category === null || note.category === undefined ? null : String(note.category),
+        String(note.body || ''),
+        ts,
+        note.updated_at || ts
+      );
+    this._indexDoc({
+      kind: String(note.kind || 'NOTE') === 'BOOKMARK' ? 'bookmark' : 'note',
+      refId: noteId,
+      caseId,
+      evidenceId: evidenceId || null,
+      start: note.at_seconds === null || note.at_seconds === undefined ? null : Number(note.at_seconds),
+      body: String(note.body || ''),
+    });
+    return noteId;
+  }
+
+  /** Restore a finding row, remapping its evidence link. */
+  restoreFinding(caseId, finding, { evidenceId = null, revisionId = null } = {}) {
+    const findingId = makeId('FINDING');
+    const ts = finding.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO findings(finding_id, case_id, title, description, observation, evidence_id, revision_id, at_seconds, speaker, body, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        findingId,
+        caseId,
+        String(finding.title || ''),
+        String(finding.description || ''),
+        String(finding.observation || ''),
+        evidenceId || null,
+        revisionId || null,
+        finding.at_seconds === null || finding.at_seconds === undefined ? null : Number(finding.at_seconds),
+        finding.speaker === null || finding.speaker === undefined ? null : String(finding.speaker),
+        String(finding.body || ''),
+        ts,
+        finding.updated_at || ts
+      );
+    this._indexFinding(findingId);
+    return findingId;
+  }
+
+  /**
+   * Restore the report working row and its append-only revisions, preserving
+   * states, ordering and the current marker. Revision ids are regenerated; the
+   * caller does not need a mapping because report revisions are not referenced
+   * by other rows.
+   */
+  restoreReport(caseId, report, revisions = []) {
+    if (!report && !revisions.length) return null;
+    const ordered = [...revisions].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    const ts = (report && (report.created_at || report.updated_at)) || nowIso();
+    const idByOld = new Map();
+    let currentNewId = null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const rev of ordered) {
+        const newId = makeId('RREV');
+        if (rev.revision_id) idByOld.set(rev.revision_id, newId);
+        if (rev.is_current) currentNewId = newId;
+        this.db
+          .prepare(
+            `INSERT INTO report_revisions(revision_id, case_id, state, is_current, template, title, sections_json, questions_json, sources_json, created_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?)`
+          )
+          .run(
+            newId,
+            caseId,
+            String(rev.state || REPORT_REVISION_STATE.DRAFT),
+            rev.is_current ? 1 : 0,
+            rev.template ?? null,
+            rev.title ?? null,
+            JSON.stringify(rev.sections || []),
+            JSON.stringify(rev.questions || []),
+            JSON.stringify(rev.sources || []),
+            rev.created_at || ts
+          );
+      }
+      if (report) {
+        if (!currentNewId && idByOld.has(report.current_revision_id)) {
+          currentNewId = idByOld.get(report.current_revision_id);
+        }
+        if (currentNewId) {
+          this.db.prepare('UPDATE report_revisions SET is_current = 0 WHERE case_id = ?').run(caseId);
+          this.db.prepare('UPDATE report_revisions SET is_current = 1 WHERE revision_id = ?').run(currentNewId);
+        }
+        this.db
+          .prepare(
+            `INSERT INTO reports(case_id, template, title, sections_json, questions_json, sources_json, state, current_revision_id, created_at, updated_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(case_id) DO UPDATE SET template = excluded.template, title = excluded.title,
+               sections_json = excluded.sections_json, questions_json = excluded.questions_json,
+               sources_json = excluded.sources_json, state = excluded.state,
+               current_revision_id = excluded.current_revision_id, updated_at = excluded.updated_at`
+          )
+          .run(
+            caseId,
+            String(report.template || 'generic'),
+            String(report.title || ''),
+            JSON.stringify(report.sections || []),
+            JSON.stringify(report.questions || []),
+            JSON.stringify(report.sources || []),
+            String(report.state || REPORT_REVISION_STATE.DRAFT),
+            currentNewId,
+            report.created_at || ts,
+            report.updated_at || ts
+          );
+      }
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    return this.getReport(caseId);
   }
 
   listHistory(caseId) {
@@ -1441,6 +1851,14 @@ class Storage {
       atSeconds: Number.isFinite(at) ? at : null,
     });
     this._touchCase(caseId);
+    this._indexDoc({
+      kind: String(kind || 'NOTE') === 'BOOKMARK' ? 'bookmark' : 'note',
+      refId: noteId,
+      caseId,
+      evidenceId: evidenceId || null,
+      start: Number.isFinite(at) ? at : null,
+      body: String(body || ''),
+    });
     return this._describeNote(this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId));
   }
 
@@ -1467,13 +1885,24 @@ class Storage {
     }
     values.push(noteId);
     this.db.prepare(`UPDATE notes SET ${sets.join(', ')} WHERE note_id = ?`).run(...values);
-    return this._describeNote(this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId));
+    const updated = this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId);
+    this._indexDoc({
+      kind: updated.kind === 'BOOKMARK' ? 'bookmark' : 'note',
+      refId: noteId,
+      caseId: updated.case_id,
+      evidenceId: updated.evidence_id || null,
+      start: updated.at_seconds === null ? null : Number(updated.at_seconds),
+      body: updated.body || '',
+    });
+    return this._describeNote(updated);
   }
 
   deleteNote(noteId) {
     const row = this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId);
     if (!row) return false;
     this.db.prepare('DELETE FROM notes WHERE note_id = ?').run(noteId);
+    this._unindex('note', noteId);
+    this._unindex('bookmark', noteId);
     this.recordHistory(row.case_id, 'NOTE_DELETED', row.evidence_id, { noteId });
     return true;
   }
@@ -1485,6 +1914,125 @@ class Storage {
     return rows.map((r) => this._describeNote(r));
   }
 
+  // ---------------------------------------------------------------- findings
+  _describeFinding(row) {
+    return {
+      finding_id: row.finding_id,
+      case_id: row.case_id,
+      title: row.title,
+      description: row.description,
+      observation: row.observation,
+      evidence_id: row.evidence_id || null,
+      revision_id: row.revision_id || null,
+      at_seconds: row.at_seconds === null ? null : Number(row.at_seconds),
+      speaker: row.speaker || null,
+      body: row.body,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  createFinding(caseId, { title = '', description = '', observation = '', evidenceId = null, revisionId = null, atSeconds = null, speaker = null, body = '' } = {}) {
+    const kase = this.getCase(caseId);
+    if (!kase) {
+      const err = new Error(`Case not found: ${caseId}`);
+      err.code = 'CASE_NOT_FOUND';
+      throw err;
+    }
+    if (evidenceId && (!this.getEvidence(evidenceId) || this.getEvidence(evidenceId).case_id !== caseId)) {
+      const err = new Error('Evidence does not belong to this case.');
+      err.code = 'EVIDENCE_MISMATCH';
+      throw err;
+    }
+    const findingId = makeId('FINDING');
+    const ts = nowIso();
+    const at = atSeconds === null || atSeconds === undefined ? null : Number(atSeconds);
+    this.db
+      .prepare(
+        `INSERT INTO findings(finding_id, case_id, title, description, observation, evidence_id, revision_id, at_seconds, speaker, body, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        findingId,
+        caseId,
+        String(title || ''),
+        String(description || ''),
+        String(observation || ''),
+        evidenceId || null,
+        revisionId || null,
+        Number.isFinite(at) ? at : null,
+        speaker === null || speaker === undefined ? null : String(speaker),
+        String(body || ''),
+        ts,
+        ts
+      );
+    this.recordHistory(caseId, 'FINDING_CREATED', evidenceId || caseId, { findingId, revisionId: revisionId || null, atSeconds: Number.isFinite(at) ? at : null });
+    this._touchCase(caseId);
+    this._indexFinding(findingId);
+    return this._describeFinding(this.db.prepare('SELECT * FROM findings WHERE finding_id = ?').get(findingId));
+  }
+
+  _indexFinding(findingId) {
+    const row = this.db.prepare('SELECT * FROM findings WHERE finding_id = ?').get(findingId);
+    if (!row) return;
+    this._indexDoc({
+      kind: 'finding',
+      refId: findingId,
+      caseId: row.case_id,
+      evidenceId: row.evidence_id || null,
+      start: row.at_seconds === null ? null : Number(row.at_seconds),
+      speaker: row.speaker || '',
+      body: `${row.title || ''} ${row.description || ''} ${row.observation || ''}`.trim(),
+    });
+  }
+
+  updateFinding(findingId, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM findings WHERE finding_id = ?').get(findingId);
+    if (!row) {
+      const err = new Error('Finding not found.');
+      err.code = 'FINDING_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    for (const [field, col] of [['title', 'title'], ['description', 'description'], ['observation', 'observation'], ['body', 'body'], ['speaker', 'speaker']]) {
+      if (patch[field] !== undefined) {
+        sets.push(`${col} = ?`);
+        values.push(patch[field] === null ? null : String(patch[field]));
+      }
+    }
+    if (patch.atSeconds !== undefined) {
+      sets.push('at_seconds = ?');
+      values.push(patch.atSeconds === null ? null : Number(patch.atSeconds));
+    }
+    if (patch.evidenceId !== undefined) {
+      sets.push('evidence_id = ?');
+      values.push(patch.evidenceId === null ? null : String(patch.evidenceId));
+    }
+    if (patch.revisionId !== undefined) {
+      sets.push('revision_id = ?');
+      values.push(patch.revisionId === null ? null : String(patch.revisionId));
+    }
+    values.push(findingId);
+    this.db.prepare(`UPDATE findings SET ${sets.join(', ')} WHERE finding_id = ?`).run(...values);
+    this._indexFinding(findingId);
+    return this._describeFinding(this.db.prepare('SELECT * FROM findings WHERE finding_id = ?').get(findingId));
+  }
+
+  deleteFinding(findingId) {
+    const row = this.db.prepare('SELECT * FROM findings WHERE finding_id = ?').get(findingId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM findings WHERE finding_id = ?').run(findingId);
+    this._unindex('finding', findingId);
+    this.recordHistory(row.case_id, 'FINDING_DELETED', row.evidence_id || row.case_id, { findingId });
+    return true;
+  }
+
+  listFindings(caseId) {
+    const rows = this.db.prepare('SELECT * FROM findings WHERE case_id = ? ORDER BY created_at ASC').all(caseId);
+    return rows.map((r) => this._describeFinding(r));
+  }
+
   // ----------------------------------------------------------------- reports
   getReport(caseId) {
     const row = this.db.prepare('SELECT * FROM reports WHERE case_id = ?').get(caseId);
@@ -1494,12 +2042,24 @@ class Storage {
       template: row.template,
       title: row.title,
       sections: row.sections_json ? JSON.parse(row.sections_json) : [],
+      questions: row.questions_json ? JSON.parse(row.questions_json) : [],
+      sources: row.sources_json ? JSON.parse(row.sources_json) : [],
+      state: row.state || REPORT_REVISION_STATE.DRAFT,
+      current_revision_id: row.current_revision_id || null,
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
   }
 
-  saveReport(caseId, { template = 'generic', title = '', sections = [] } = {}) {
+  /**
+   * Save the report working draft and append an immutable report revision.
+   *
+   * A finalized report revision is never silently replaced: if the current
+   * revision is FINAL and the caller does not explicitly reopen it, the save is
+   * refused with REPORT_FINAL_LOCKED. Reopening appends a new DRAFT revision and
+   * leaves the FINAL snapshot readable.
+   */
+  saveReport(caseId, { template = 'generic', title = '', sections = [], questions = [], sources = [], state = REPORT_REVISION_STATE.DRAFT, reopen = false } = {}) {
     const kase = this.getCase(caseId);
     if (!kase) {
       const err = new Error(`Case not found: ${caseId}`);
@@ -1507,22 +2067,137 @@ class Storage {
       throw err;
     }
     const existing = this.getReport(caseId);
+    const currentRevision = this.getCurrentReportRevision(caseId);
+    if (currentRevision && currentRevision.state === REPORT_REVISION_STATE.FINAL && !reopen && state !== REPORT_REVISION_STATE.FINAL) {
+      const err = new Error('The finalized report is locked. Reopen it to make further edits.');
+      err.code = 'REPORT_FINAL_LOCKED';
+      throw err;
+    }
     const ts = nowIso();
     const payload = JSON.stringify(Array.isArray(sections) ? sections : []);
-    if (existing) {
-      this.db
-        .prepare('UPDATE reports SET template = ?, title = ?, sections_json = ?, updated_at = ? WHERE case_id = ?')
-        .run(String(template), String(title || ''), payload, ts, caseId);
-    } else {
+    const questionsJson = JSON.stringify(Array.isArray(questions) ? questions : []);
+    const sourcesJson = JSON.stringify(Array.isArray(sources) ? sources : []);
+    const revisionId = makeId('RREV');
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (existing) {
+        this.db
+          .prepare(
+            `UPDATE reports SET template = ?, title = ?, sections_json = ?, questions_json = ?, sources_json = ?, state = ?, current_revision_id = ?, updated_at = ? WHERE case_id = ?`
+          )
+          .run(String(template), String(title || ''), payload, questionsJson, sourcesJson, String(state), revisionId, ts, caseId);
+      } else {
+        this.db
+          .prepare(
+            `INSERT INTO reports(case_id, template, title, sections_json, questions_json, sources_json, state, current_revision_id, created_at, updated_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?)`
+          )
+          .run(caseId, String(template), String(title || ''), payload, questionsJson, sourcesJson, String(state), revisionId, ts, ts);
+      }
+      this.db.prepare('UPDATE report_revisions SET is_current = 0 WHERE case_id = ?').run(caseId);
       this.db
         .prepare(
-          'INSERT INTO reports(case_id, template, title, sections_json, created_at, updated_at) VALUES(?,?,?,?,?,?)'
+          `INSERT INTO report_revisions(revision_id, case_id, state, is_current, template, title, sections_json, questions_json, sources_json, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?)`
         )
-        .run(caseId, String(template), String(title || ''), payload, ts, ts);
+        .run(revisionId, caseId, String(state), 1, String(template), String(title || ''), payload, questionsJson, sourcesJson, ts);
+      this.db
+        .prepare('INSERT INTO history(case_id, action, target, detail_json, created_at) VALUES(?,?,?,?,?)')
+        .run(
+          caseId,
+          'REPORT_SAVED',
+          caseId,
+          JSON.stringify({
+            template,
+            sectionCount: (Array.isArray(sections) ? sections : []).length,
+            questionCount: (Array.isArray(questions) ? questions : []).length,
+            revisionId,
+            state,
+          }),
+          ts
+        );
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
     }
-    this.recordHistory(caseId, 'REPORT_SAVED', caseId, { template, sectionCount: (Array.isArray(sections) ? sections : []).length });
     this._touchCase(caseId);
     return this.getReport(caseId);
+  }
+
+  _describeReportRevision(row) {
+    return {
+      revision_id: row.revision_id,
+      case_id: row.case_id,
+      state: row.state,
+      is_current: row.is_current ? 1 : 0,
+      template: row.template,
+      title: row.title,
+      sections: row.sections_json ? JSON.parse(row.sections_json) : [],
+      questions: row.questions_json ? JSON.parse(row.questions_json) : [],
+      sources: row.sources_json ? JSON.parse(row.sources_json) : [],
+      created_at: row.created_at,
+    };
+  }
+
+  getCurrentReportRevision(caseId) {
+    return (
+      this._describeReportRevision(
+        this.db
+          .prepare('SELECT * FROM report_revisions WHERE case_id = ? AND is_current = 1 ORDER BY created_at DESC LIMIT 1')
+          .get(caseId) || {}
+      ) || null
+    );
+  }
+
+  listReportRevisions(caseId) {
+    const rows = this.db
+      .prepare('SELECT * FROM report_revisions WHERE case_id = ? ORDER BY created_at DESC')
+      .all(caseId);
+    return rows.map((r) => this._describeReportRevision(r));
+  }
+
+  getReportRevision(revisionId) {
+    const row = this.db.prepare('SELECT * FROM report_revisions WHERE revision_id = ?').get(revisionId);
+    return row ? this._describeReportRevision(row) : null;
+  }
+
+  /** Make a prior report revision the current working draft (append-only history). */
+  setCurrentReportRevision(revisionId) {
+    const rev = this.getReportRevision(revisionId);
+    if (!rev) {
+      const err = new Error('Report revision not found.');
+      err.code = 'REPORT_REVISION_NOT_FOUND';
+      throw err;
+    }
+    const ts = nowIso();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('UPDATE report_revisions SET is_current = 0 WHERE case_id = ?').run(rev.case_id);
+      this.db.prepare('UPDATE report_revisions SET is_current = 1 WHERE revision_id = ?').run(revisionId);
+      this.db
+        .prepare(
+          'UPDATE reports SET template = ?, title = ?, sections_json = ?, questions_json = ?, sources_json = ?, state = ?, current_revision_id = ?, updated_at = ? WHERE case_id = ?'
+        )
+        .run(
+          rev.template,
+          rev.title,
+          JSON.stringify(rev.sections),
+          JSON.stringify(rev.questions),
+          JSON.stringify(rev.sources),
+          rev.state,
+          revisionId,
+          ts,
+          rev.case_id
+        );
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+    this.recordHistory(rev.case_id, 'REPORT_REVISION_RESTORED', rev.case_id, { revisionId, state: rev.state });
+    return this.getReport(rev.case_id);
   }
 
   // ------------------------------------------------------------ preferences
@@ -1597,21 +2272,91 @@ class Storage {
 
   // ---------------------------------------------------------------- search
   /**
-   * Search a case's transcript segments, speakers, notes/bookmarks and evidence
-   * names. Case-insensitive substring match. Returns positioned hits so the UI
-   * can jump straight to the recording time.
+   * Build an FTS5 MATCH expression from free text: every whitespace token
+   * becomes a quoted prefix term joined with AND, so "ses kayd" matches "ses
+   * kaydı" and punctuation can never break the query.
+   */
+  _ftsQuery(text) {
+    return String(text || '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((tok) => `"${tok.replace(/"/g, '""')}"*`)
+      .join(' ');
+  }
+
+  /**
+   * Case-wide search over transcript text, speakers, evidence names and
+   * notes/bookmarks/findings.
+   *
+   * Uses the FTS5 index when the bundled SQLite supports it (ranked, indexed,
+   * no full-table scan); otherwise it falls back to an indexed LIKE scan. Every
+   * hit is positioned so the UI can jump straight to the recording time, and
+   * segment hits carry the revision they came from.
    */
   searchCase(caseId, query, { limit = 200 } = {}) {
-    const q = String(query || '').trim().toLowerCase();
-    if (!q) return { query: '', hits: [] };
+    const raw = String(query || '').trim();
+    if (!raw) return { query: '', hits: [], engine: this.ftsAvailable ? 'fts5' : 'like' };
     const max = Math.max(1, Math.min(1000, Number(limit) || 200));
+    const evidence = this.listEvidence(caseId);
+    const evById = new Map(evidence.map((e) => [e.evidence_id, e]));
+
+    if (this.ftsAvailable) {
+      const hits = this._searchFts(caseId, raw, max, evById);
+      if (hits) return { query: raw, hits, engine: 'fts5' };
+      // On an FTS error, fall through to the LIKE scan rather than fail search.
+    }
+    return { query: raw, hits: this._searchLike(caseId, raw.toLowerCase(), max, evidence, evById), engine: 'like' };
+  }
+
+  _searchFts(caseId, raw, max, evById) {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT kind, ref_id, evidence_id, transcript_id, start_seconds, speaker, body
+             FROM search_fts WHERE case_id = ? AND search_fts MATCH ? ORDER BY rank LIMIT ?`
+        )
+        .all(caseId, this._ftsQuery(raw), max);
+      const hits = [];
+      const revCache = new Map();
+      for (const r of rows) {
+        const ev = r.evidence_id ? evById.get(r.evidence_id) : null;
+        const hit = {
+          type: r.kind,
+          evidence_id: r.evidence_id || null,
+          evidence_name: ev ? ev.original_name : null,
+          text: r.body,
+          speaker: r.speaker || null,
+        };
+        if (r.kind === 'segment') {
+          hit.transcript_id = r.transcript_id;
+          hit.segment_id = r.ref_id;
+          hit.start = r.start_seconds === null ? null : Number(r.start_seconds);
+          if (r.transcript_id && !revCache.has(r.transcript_id)) {
+            const rev = this.getCurrentRevisionInfo(r.transcript_id);
+            revCache.set(r.transcript_id, rev ? { revision_id: rev.revision_id, state: rev.state } : null);
+          }
+          hit.revision = r.transcript_id ? revCache.get(r.transcript_id) : null;
+        } else if (r.kind === 'note' || r.kind === 'bookmark') {
+          hit.note_id = r.ref_id;
+          hit.at_seconds = r.start_seconds === null ? null : Number(r.start_seconds);
+        } else if (r.kind === 'finding') {
+          hit.finding_id = r.ref_id;
+          hit.at_seconds = r.start_seconds === null ? null : Number(r.start_seconds);
+        }
+        hits.push(hit);
+      }
+      return hits;
+    } catch {
+      return null;
+    }
+  }
+
+  _searchLike(caseId, q, max, evidence, evById) {
     const hits = [];
     const push = (hit) => {
       if (hits.length < max) hits.push(hit);
     };
-
-    const evidence = this.listEvidence(caseId);
-    const evById = new Map(evidence.map((e) => [e.evidence_id, e]));
 
     for (const ev of evidence) {
       if (String(ev.original_name || '').toLowerCase().includes(q)) {
@@ -1622,6 +2367,8 @@ class Storage {
     for (const ev of evidence) {
       const t = this.getTranscript(caseId, ev.evidence_id);
       if (!t) continue;
+      const rev = this.getCurrentRevisionInfo(t.transcript_id);
+      const revision = rev ? { revision_id: rev.revision_id, state: rev.state } : null;
       for (const s of this.getSegments(t.transcript_id)) {
         if (String(s.text || '').toLowerCase().includes(q) || String(s.speaker || '').toLowerCase().includes(q)) {
           push({
@@ -1635,6 +2382,7 @@ class Storage {
             speaker: s.speaker,
             status: s.status,
             text: s.text,
+            revision,
           });
         }
       }
@@ -1655,7 +2403,22 @@ class Storage {
       }
     }
 
-    return { query: String(query), hits };
+    for (const f of this.listFindings(caseId)) {
+      const hay = `${f.title || ''} ${f.description || ''} ${f.observation || ''}`.toLowerCase();
+      if (hay.includes(q)) {
+        const ev = f.evidence_id ? evById.get(f.evidence_id) : null;
+        push({
+          type: 'finding',
+          finding_id: f.finding_id,
+          evidence_id: f.evidence_id,
+          evidence_name: ev ? ev.original_name : null,
+          at_seconds: f.at_seconds,
+          text: f.title || f.observation || '',
+        });
+      }
+    }
+
+    return hits;
   }
 
   stats() {

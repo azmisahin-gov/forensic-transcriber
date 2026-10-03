@@ -43,6 +43,34 @@
   });
   const REVISION_STATE_VALUES = Object.freeze(Object.values(REVISION_STATE));
 
+  // Report revisions are append-only snapshots like transcript revisions. A
+  // finalized report revision is never silently overwritten; a further edit
+  // appends a new revision instead.
+  const REPORT_REVISION_STATE = Object.freeze({
+    DRAFT: 'DRAFT',
+    EDITED: 'EDITED',
+    FINAL_REVIEW: 'FINAL_REVIEW',
+    FINAL: 'FINAL',
+  });
+  const REPORT_REVISION_STATE_VALUES = Object.freeze(Object.values(REPORT_REVISION_STATE));
+
+  // Per-segment operator working flags. Distinct from the transcript status:
+  // a flag is a personal reminder, not a status change or a legal finding.
+  const REVIEW_FLAGS = Object.freeze({
+    UNCLEAR: 'UNCLEAR',
+    REVISIT: 'REVISIT',
+    REVIEW: 'REVIEW',
+  });
+  const REVIEW_FLAG_VALUES = Object.freeze(Object.values(REVIEW_FLAGS));
+
+  // Note kinds. BOOKMARK is time-anchored; FINDING is a structured observation
+  // the operator may promote into the report with an explicit source link.
+  const NOTE_KIND = Object.freeze({
+    NOTE: 'NOTE',
+    BOOKMARK: 'BOOKMARK',
+    FINDING: 'FINDING',
+  });
+
   const TRANSCRIPT_SCHEMA_VERSION = '1.0';
   const CASE_SCHEMA_VERSION = '1.0';
 
@@ -121,7 +149,19 @@
     REPORT_BUILD: 'report:build',
     REPORT_EXPORT: 'report:export',
     REPORT_CHECKLIST: 'report:checklist',
+    REPORT_REVISIONS: 'report:revisions',
+    REPORT_REVISION_SET: 'report:revision-set',
+    REPORT_REVISION_GET: 'report:revision-get',
+    FINDING_CREATE: 'finding:create',
+    FINDING_LIST: 'finding:list',
+    FINDING_UPDATE: 'finding:update',
+    FINDING_DELETE: 'finding:delete',
+    TRANSCRIPT_PAGE: 'transcript:page',
+    SEARCH_INDEX: 'search:index',
     DELIVERY_BUILD: 'delivery:build',
+    UYAP_PREPARE: 'uyap:prepare',
+    AI_STATUS: 'ai:status',
+    AI_GENERATE: 'ai:generate',
     PREF_ALL: 'pref:all',
     PREF_SET: 'pref:set',
     DIAGNOSTICS_LIST: 'diagnostics:list',
@@ -138,6 +178,11 @@
     HUMAN_STATUSES,
     REVISION_STATE,
     REVISION_STATE_VALUES,
+    REPORT_REVISION_STATE,
+    REPORT_REVISION_STATE_VALUES,
+    REVIEW_FLAGS,
+    REVIEW_FLAG_VALUES,
+    NOTE_KIND,
     UNCLEAR_PLACEHOLDER,
     TRANSCRIPT_SCHEMA_VERSION,
     CASE_SCHEMA_VERSION,

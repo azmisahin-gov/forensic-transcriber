@@ -75,6 +75,10 @@ async function buildCaseArchive({ storage, caseId }) {
   const evidence = storage.listEvidence(caseId);
   const runs = storage.listTranscriptionRuns(caseId);
   const history = storage.listHistory(caseId);
+  const notes = storage.listNotes(caseId);
+  const findings = storage.listFindings(caseId);
+  const report = storage.getReport(caseId);
+  const reportRevisions = storage.listReportRevisions(caseId);
 
   const transcripts = [];
   for (const ev of evidence) {
@@ -97,7 +101,7 @@ async function buildCaseArchive({ storage, caseId }) {
   for (const rel of walkFiles(kase.case_dir, 'transcript')) addFile(rel.split(path.sep).join('/'), path.join(kase.case_dir, rel));
   for (const rel of walkFiles(kase.case_dir, 'exports')) addFile(rel.split(path.sep).join('/'), path.join(kase.case_dir, rel));
 
-  const caseData = { case: kase, evidence, transcripts, runs, history };
+  const caseData = { case: kase, evidence, transcripts, runs, history, notes, findings, report, report_revisions: reportRevisions };
   const caseJson = Buffer.from(`${JSON.stringify(caseData, null, 2)}\n`, 'utf8');
   entries.push({ name: 'database/case.json', data: caseJson });
   fileIndex.push({ path: 'database/case.json', sizeBytes: caseJson.length, sha256: sha256Buffer(caseJson) });
@@ -116,6 +120,9 @@ async function buildCaseArchive({ storage, caseId }) {
       transcript_revisions: transcripts.reduce((n, t) => n + (t.revisions ? t.revisions.length : 0), 0),
       transcription_runs: runs.length,
       history: history.length,
+      notes: notes.length,
+      findings: findings.length,
+      report_revisions: reportRevisions.length,
       files: fileIndex.length,
     },
     // Each evidence entry records the hash of the imported copy as stored, so a
@@ -286,6 +293,7 @@ async function restoreCaseArchive({ storage, buffer }) {
   //   runIdMap         archive run id -> new run id
   const transcriptIdMap = new Map();
   const runIdMap = new Map();
+  const revisionIdMap = new Map();
 
   // 1. Runs first so their new ids are known when revisions are inserted. The
   //    transcript link is written in step 3 once transcripts exist.
@@ -317,6 +325,7 @@ async function restoreCaseArchive({ storage, buffer }) {
     }
     const restored = storage.restoreTranscript(caseId, newEvidenceId, t.transcript, revisions, { runIdMap });
     transcriptIdMap.set(t.transcript.transcript_id, restored.transcript_id);
+    for (const [oldId, newId] of restored.revisionIdMap) revisionIdMap.set(oldId, newId);
     storage.recordHistory(caseId, 'ARCHIVE_TRANSCRIPT_RESTORED', newEvidenceId, {
       from_archive_evidence_id: t.transcript.evidence_id,
       revision_count: revisions.length,
@@ -330,6 +339,23 @@ async function restoreCaseArchive({ storage, buffer }) {
     const newTranscriptId = transcriptIdMap.get(run.transcript_id);
     if (newTranscriptId) storage.linkRunTranscript(newRunId, newTranscriptId);
   }
+
+  // 4. Notes and bookmarks, preserving their timestamps and evidence links.
+  for (const note of caseData.notes || []) {
+    const newEvidenceId = note.evidence_id ? idMap.get(note.evidence_id) || null : null;
+    storage.restoreNote(caseId, note, { evidenceId: newEvidenceId });
+  }
+
+  // 5. Structured findings, remapping both the evidence link and the transcript
+  //    revision link so a finding stays attached to the exact revision it cited.
+  for (const finding of caseData.findings || []) {
+    const newEvidenceId = finding.evidence_id ? idMap.get(finding.evidence_id) || null : null;
+    const newRevisionId = finding.revision_id ? revisionIdMap.get(finding.revision_id) || null : null;
+    storage.restoreFinding(caseId, finding, { evidenceId: newEvidenceId, revisionId: newRevisionId });
+  }
+
+  // 6. The report working row and its append-only revisions.
+  storage.restoreReport(caseId, caseData.report || null, caseData.report_revisions || []);
 
   return { caseId, manifest, verified, evidenceIdMap: Object.fromEntries(idMap) };
 }
