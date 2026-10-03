@@ -98,7 +98,9 @@ const runtimeFiles = walk(path.join(REPO_ROOT, 'src'), (n) => n.endsWith('.js') 
 const netPatterns = [
   { re: /https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/gi, label: 'url' },
 ];
-const allowedHosts = new Set(['huggingface.co', 'www.w3.org', 'opensource.org', 'github.com']);
+// XML namespace hosts (w3.org, openxmlformats.org) name schemas and are never
+// fetched; they are listed so document generation is not read as telemetry.
+const allowedHosts = new Set(['huggingface.co', 'www.w3.org', 'schemas.openxmlformats.org', 'opensource.org', 'github.com']);
 const runtimeUrls = new Set();
 for (const file of runtimeFiles) {
   const src = fs.readFileSync(file, 'utf8');

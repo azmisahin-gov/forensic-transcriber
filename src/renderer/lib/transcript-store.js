@@ -169,6 +169,25 @@
       return true;
     }
 
+    /**
+     * Toggle an operator working flag (UNCLEAR / REVISIT / REVIEW) on a segment.
+     * Flags are local review state: they never change the segment text or its
+     * status, and they travel with the transcript on save.
+     */
+    toggleFlag(segmentId, flag) {
+      const seg = this.getById(segmentId);
+      if (!seg || !flag) return false;
+      this._commit();
+      const target = this.getById(segmentId);
+      const flags = Array.isArray(target.flags) ? target.flags.slice() : [];
+      const at = flags.indexOf(flag);
+      if (at >= 0) flags.splice(at, 1);
+      else flags.push(flag);
+      target.flags = flags;
+      this._emit();
+      return true;
+    }
+
     deleteSegment(segmentId) {
       if (!this.getById(segmentId)) return false;
       this._commit();
@@ -294,6 +313,9 @@
         status: s.status,
         confidence: s.confidence ?? null,
         words: s.words ?? null,
+        // Operator working flags (UNCLEAR / REVISIT / REVIEW) travel with the
+        // segment so they survive save and reopen.
+        flags: Array.isArray(s.flags) ? s.flags.slice() : [],
       }));
     }
 

@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { Storage } = require('../../src/main/services/storage');
+const { Storage, SCHEMA_VERSION } = require('../../src/main/services/storage');
 const { writeFileAtomic, copyFileAtomic } = require('../../src/main/services/atomic');
 
 function tmp() {
@@ -111,7 +111,7 @@ test('a migration backs up the database and is re-runnable', () => {
   const storage = new Storage(dir);
   assert.ok(storage.lastMigration, 'a migration should have run');
   assert.equal(storage.lastMigration.from, 1);
-  assert.equal(storage.lastMigration.to, 4);
+  assert.equal(storage.lastMigration.to, SCHEMA_VERSION);
   assert.ok(storage.lastMigration.backupPath, 'a pre-migration backup should exist');
   assert.ok(fs.existsSync(storage.lastMigration.backupPath), 'backup file must exist on disk');
   // The legacy case survived.
@@ -121,7 +121,7 @@ test('a migration backs up the database and is re-runnable', () => {
   // Re-running the migration on an already-migrated database is a no-op and
   // must not create another backup or lose data.
   const again = new Storage(dir);
-  assert.equal(again.lastMigration.from, 4);
+  assert.equal(again.lastMigration.from, SCHEMA_VERSION);
   assert.equal(again.getCase('C1').title, 'Legacy');
   again.close();
 });

@@ -161,6 +161,39 @@ samples that are not valid UTF-8, and buffering the whole decoded stream scales
 with the recording length. Both are avoided for a visual aid that must still be
 correct and must not spike memory on multi-hour recordings.
 
+## D8c — Reports are technical work products; review aids are non-destructive
+
+**Decision.** The work-station additions (case intake/dashboard, notes, reports,
+delivery package, support bundle, per-segment flags, transcript filter/search)
+are **additive**. They never generate a legal assessment: the report builders
+emit a data-integrity verdict and a delivery-readiness checklist and carry a
+technical-work-product disclaimer into every format (TXT/HTML/DOCX/PDF). Review
+flags (`UNCLEAR`/`REVISIT`/`REVIEW`) are operator working state stored in
+`segments.flags_json`; they never change a segment's text or status. Editing
+still goes through the D8/D8b status/revision model unchanged.
+
+**Why.** The product must be usable as a 56.12 expert work station without
+weakening the core invariant that machine and expert output never overwrite each
+other, and without implying forensic or legal conclusions the software cannot
+make. Keeping reports and review aids purely additive preserves the P12 trust
+model and the offline-first guarantee (no new dependency; the DOCX/PDF/ZIP/TAR
+writers are in-repo).
+
+## D8d — UI is fully localized; Turkish is the default
+
+**Decision.** All operator-facing strings resolve through the in-repo
+`src/shared/i18n.js` dictionary (`t(key)`), driven by `data-i18n` attributes in
+the markup and `t()` calls in the renderer. Turkish is the default and English is
+a complete second locale; both dictionaries must expose exactly the same keys.
+An unknown or absent locale falls back to Turkish. No string is left hard-coded
+in the renderer.
+
+**Why.** A 56.12 expert work station is used by Turkish Ministry of Justice
+experts; a half-translated or partially hard-coded UI is a correctness and trust
+problem, not a cosmetic one. Key-for-key parity is enforced by a regression test
+so a new string cannot ship in only one language. Keeping the dictionary in-repo
+(no runtime dependency, no network fetch) preserves the offline-first guarantee.
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,

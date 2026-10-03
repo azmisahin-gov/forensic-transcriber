@@ -3,6 +3,7 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 
 const { IPC, SUPPORTED_EXTENSIONS, HISTORY_ACTIONS } = require('../shared/constants');
@@ -15,6 +16,11 @@ const { WhisperAdapter } = require('./services/whisper');
 const { RuntimeSelector } = require('./services/runtime-selector');
 const { runExport } = require('./services/exporter');
 const { writeCaseArchive, restoreCaseArchive } = require('./services/case-archive');
+const reports = require('./services/reports');
+const { reportToDocx, reportToPdf } = require('./services/report-render');
+const { writeDeliveryPackage, buildDeliveryPackage } = require('./services/delivery');
+const { writeSupportBundle, buildSupportBundle } = require('./services/support');
+const { copyFileAtomic, writeFileAtomic } = require('./services/atomic');
 const { createUpdater, STATES: UPDATE_STATES } = require('./services/updater');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
 
@@ -211,6 +217,94 @@ function playbackPath(ev) {
   return ev.original_path;
 }
 
+/** Assemble the application information payload (used by IPC and support). */
+async function buildAppInfo() {
+  const mediaStatus = await media.available();
+  const models = await modelManager.list();
+  return {
+    name: 'Forensic Transcriber',
+    version: app.getVersion(),
+    scope: '56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi',
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    node: process.versions.node,
+    dataDir: userDataDir(),
+    modelsDir: modelsDir(),
+    engine: whisper.describe(),
+    engineVersion: await whisper.version(),
+    media: mediaStatus,
+    modelReady: models.some((m) => m.kind === 'asr' && m.installed && m.verified),
+    defaultModelId: DEFAULT_ASR_MODEL_ID,
+    supportedExtensions: SUPPORTED_EXTENSIONS,
+    storage: storage.stats(),
+    engineProbe: engineProbeCache,
+    lastRunMode,
+  };
+}
+
+/** Compact engine/runtime provenance summary for reports and delivery packages. */
+function currentEngineInfo() {
+  const mode = lastRunMode || {};
+  return {
+    engine: 'whisper.cpp',
+    engineVersion: engineProbeCache ? engineProbeCache.engineVersion : null,
+    modelId: DEFAULT_ASR_MODEL_ID,
+    modelSha256: (getModel(DEFAULT_ASR_MODEL_ID) || {}).sha256 || null,
+    runtimeMode: mode.mode || null,
+    runtimeReason: mode.reason || null,
+    gpuRuntimeBundled: mode.gpuRuntimeBundled ?? null,
+    gpuSelected: mode.gpuSelected ?? null,
+    vadModel: DEFAULT_VAD_MODEL_ID,
+    appVersion: app.getVersion(),
+  };
+}
+
+/** Re-verify every evidence copy's hash for a case. Never rewrites anything. */
+async function verifyEvidenceIntegrity(evidence) {
+  const integrity = [];
+  for (const ev of evidence) {
+    if (!fs.existsSync(ev.original_path)) {
+      integrity.push({ evidence_id: ev.evidence_id, status: 'MISSING' });
+      continue;
+    }
+    const actual = await sha256File(ev.original_path);
+    integrity.push({
+      evidence_id: ev.evidence_id,
+      status: actual === ev.sha256 ? 'OK' : 'MISMATCH',
+      storedSha256: ev.sha256,
+      actualSha256: actual,
+    });
+  }
+  return integrity;
+}
+
+async function buildReportForCase(caseId) {
+  const kase = requireCase(caseId);
+  const evidence = storage.listEvidence(caseId);
+  const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
+  const notes = storage.listNotes(caseId);
+  const report = storage.getReport(caseId);
+  const integrity = await verifyEvidenceIntegrity(evidence);
+  let dashboard = null;
+  try {
+    dashboard = storage.caseDashboard(caseId);
+  } catch {
+    dashboard = null;
+  }
+  return reports.buildReport({
+    caseRecord: kase,
+    evidence,
+    transcripts,
+    notes,
+    engineInfo: currentEngineInfo(),
+    report,
+    integrity,
+    dashboard,
+  });
+}
+
+
 function registerMediaProtocol() {
   protocol.handle(MEDIA_SCHEME, async (request) => {
     try {
@@ -267,30 +361,7 @@ function registerMediaProtocol() {
 }
 
 function registerIpc() {
-  handle(IPC.APP_INFO, async () => {
-    const mediaStatus = await media.available();
-    const models = await modelManager.list();
-    return {
-      name: 'Forensic Transcriber',
-      version: app.getVersion(),
-      scope: '56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi',
-      platform: process.platform,
-      arch: process.arch,
-      electron: process.versions.electron,
-      node: process.versions.node,
-      dataDir: userDataDir(),
-      modelsDir: modelsDir(),
-      engine: whisper.describe(),
-      engineVersion: await whisper.version(),
-      media: mediaStatus,
-      modelReady: models.some((m) => m.kind === 'asr' && m.installed && m.verified),
-      defaultModelId: DEFAULT_ASR_MODEL_ID,
-      supportedExtensions: SUPPORTED_EXTENSIONS,
-      storage: storage.stats(),
-      engineProbe: engineProbeCache,
-      lastRunMode,
-    };
-  });
+  handle(IPC.APP_INFO, async () => buildAppInfo());
 
   // Report what the ASR runtimes can actually do. Requires an installed model
   // (the engine must load one to enumerate devices); the result is cached.
@@ -406,11 +477,27 @@ function registerIpc() {
     const paths = Array.isArray(filePaths) ? filePaths : [filePaths];
     const imported = [];
     const failures = [];
-    for (const filePath of paths) {
+    const total = paths.length;
+    // Per-file progress from the real import steps (verify → probe → copy →
+    // hash → record). The renderer shows this queue; there is no timer here.
+    const emit = (index, filePath, stage, detail = {}) => {
+      send(IPC.EVIDENCE_IMPORT_PROGRESS, {
+        kind: 'import',
+        index,
+        total,
+        name: path.basename(filePath),
+        stage,
+        ...detail,
+      });
+    };
+    for (let i = 0; i < paths.length; i += 1) {
+      const filePath = paths[i];
       try {
         if (!fs.existsSync(filePath)) throw Object.assign(new Error('File not found.'), { code: 'FILE_NOT_FOUND' });
+        emit(i, filePath, 'verifying');
         let meta = {};
         try {
+          emit(i, filePath, 'inspecting');
           meta = await media.probe(filePath);
         } catch (probeErr) {
           // A file the decoder cannot read is still recorded, with a warning,
@@ -418,10 +505,13 @@ function registerIpc() {
           meta = {};
           failures.push({ path: filePath, error: toErrorPayload(probeErr) });
         }
+        emit(i, filePath, 'copying');
         const ev = await storage.importEvidence(caseId, filePath, meta);
         imported.push({ ...ev, probeWarning: meta.format ? null : 'Metadata could not be read by the decoder.' });
+        emit(i, filePath, 'complete', { evidenceId: ev.evidence_id });
       } catch (err) {
         failures.push({ path: filePath, error: toErrorPayload(err) });
+        emit(i, filePath, 'failed', { error: toErrorPayload(err) });
       }
     }
     return { imported, failures };
@@ -620,6 +710,174 @@ function registerIpc() {
     return written;
   });
 
+  // --------------------------------------------------------- dashboard/notes
+  handle(IPC.CASE_DASHBOARD, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.caseDashboard(caseId);
+  });
+
+  handle(IPC.NOTE_LIST, async (_e, caseId, evidenceId) => {
+    requireCase(caseId);
+    return storage.listNotes(caseId, { evidenceId: evidenceId || null });
+  });
+  handle(IPC.NOTE_CREATE, async (_e, caseId, input) => {
+    requireCase(caseId);
+    const note = storage.createNote(caseId, input || {});
+    return note;
+  });
+  handle(IPC.NOTE_UPDATE, async (_e, noteId, patch) => storage.updateNote(noteId, patch || {}));
+  handle(IPC.NOTE_DELETE, async (_e, noteId) => storage.deleteNote(noteId));
+
+  handle(IPC.SEARCH_CASE, async (_e, caseId, query) => {
+    requireCase(caseId);
+    return storage.searchCase(caseId, query);
+  });
+
+  // ------------------------------------------------------------ report space
+  handle(IPC.REPORT_TEMPLATES, async () =>
+    Object.entries(reports.TEMPLATES).map(([id, t]) => ({ id, label: t.label, sections: t.sections }))
+  );
+  handle(IPC.REPORT_GET, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.getReport(caseId);
+  });
+  handle(IPC.REPORT_SAVE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.saveReport(caseId, payload || {});
+  });
+  handle(IPC.REPORT_BUILD, async (_e, caseId) => {
+    requireCase(caseId);
+    return buildReportForCase(caseId);
+  });
+  handle(IPC.REPORT_CHECKLIST, async (_e, caseId) => {
+    requireCase(caseId);
+    const kase = storage.getCase(caseId);
+    const evidence = storage.listEvidence(caseId);
+    const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
+    const integrity = await verifyEvidenceIntegrity(evidence);
+    const report = storage.getReport(caseId);
+    const dashboard = storage.caseDashboard(caseId);
+    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard });
+  });
+
+  // Render the report to the requested formats, written to a folder the user
+  // picks. The report always records the revision each excerpt came from.
+  handle(IPC.REPORT_EXPORT, async (_e, caseId, options = {}) => {
+    const kase = requireCase(caseId);
+    const built = await buildReportForCase(caseId);
+    const formats = Array.isArray(options.formats) && options.formats.length
+      ? options.formats
+      : ['docx', 'pdf', 'html', 'txt'];
+    const dir = options.outputDir
+      ? options.outputDir
+      : path.join(kase.case_dir, 'exports', 'report');
+    fs.mkdirSync(dir, { recursive: true });
+    const written = [];
+    for (const format of formats) {
+      let content;
+      let ext;
+      let mime;
+      if (format === 'docx') {
+        content = reportToDocx(built);
+        ext = 'docx';
+        mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (format === 'pdf') {
+        content = reportToPdf(built);
+        ext = 'pdf';
+        mime = 'application/pdf';
+      } else if (format === 'html') {
+        content = reports.reportToHtml(built);
+        ext = 'html';
+        mime = 'text/html';
+      } else if (format === 'txt') {
+        content = reports.reportToTxt(built);
+        ext = 'txt';
+        mime = 'text/plain';
+      } else {
+        throw Object.assign(new Error(`Unsupported report format: ${format}`), { code: 'REPORT_FORMAT_UNSUPPORTED' });
+      }
+      const filePath = path.join(dir, `report.${ext}`);
+      writeFileAtomic(filePath, content);
+      written.push({
+        format,
+        mime,
+        path: filePath,
+        bytes: Buffer.byteLength(content),
+        sha256: crypto.createHash('sha256').update(content).digest('hex'),
+      });
+    }
+    storage.recordHistory(caseId, 'REPORT_EXPORTED', caseId, {
+      formats: written.map((w) => w.format),
+      files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
+    });
+    return { dir, files: written, report: built };
+  });
+
+  // ---------------------------------------------------------- delivery pkg
+  handle(IPC.DELIVERY_BUILD, async (_e, caseId, options = {}) => {
+    const kase = requireCase(caseId);
+    const suggested = `${(kase.title || 'case').replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 60)}__${caseId}.ftdelivery.tar.gz`;
+    const picked = options.destPath
+      ? { canceled: false, filePath: options.destPath }
+      : await dialog.showSaveDialog(mainWindow, {
+          title: 'Create delivery package',
+          defaultPath: suggested,
+          filters: [{ name: 'Forensic Transcriber delivery package', extensions: ['tar.gz', 'ftdelivery'] }],
+        });
+    if (picked.canceled || !picked.filePath) return { canceled: true };
+    const result = await writeDeliveryPackage({
+      storage,
+      caseId,
+      engineInfo: currentEngineInfo(),
+      includeEvidence: Boolean(options.includeEvidence),
+      destPath: picked.filePath,
+      onProgress: (p) => send(IPC.TRANSCRIBE_PROGRESS, { kind: 'delivery', ...p }),
+    });
+    storage.recordHistory(caseId, 'DELIVERY_PACKAGE', caseId, {
+      path: result.path,
+      sha256: result.sha256,
+      bytes: result.bytes,
+      includeEvidence: Boolean(options.includeEvidence),
+    });
+    return result;
+  });
+
+  // ------------------------------------------------------- preferences/diag
+  handle(IPC.PREF_ALL, async () => storage.allPreferences());
+  handle(IPC.PREF_SET, async (_e, key, value) => {
+    storage.setPreference(key, value);
+    return storage.allPreferences();
+  });
+  handle(IPC.DIAGNOSTICS_LIST, async (_e, limit) => storage.listDiagnostics(limit));
+  handle(IPC.DIAGNOSTICS_RECORD, async (_e, entry) => {
+    storage.recordDiagnostic(entry || {});
+    return true;
+  });
+  // Build the local support bundle. Nothing is uploaded: the file is written
+  // where the user chooses so they decide whether to share it.
+  handle(IPC.SUPPORT_BUNDLE, async (_e, options = {}) => {
+    const suggested = `forensic-transcriber-support-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+    const picked = options.destPath
+      ? { canceled: false, filePath: options.destPath }
+      : await dialog.showSaveDialog(mainWindow, {
+          title: 'Save support bundle',
+          defaultPath: suggested,
+          filters: [{ name: 'Support bundle', extensions: ['tar.gz'] }],
+        });
+    if (picked.canceled || !picked.filePath) return { canceled: true };
+    const appInfo = await buildAppInfo();
+    const result = writeSupportBundle({
+      destPath: picked.filePath,
+      appInfo,
+      engineInfo: currentEngineInfo(),
+      diagnostics: storage.listDiagnostics(200),
+      logFile: logger ? logger.file : null,
+      extra: options.extra || {},
+    });
+    storage.recordDiagnostic({ level: 'info', category: 'support', summary: 'support bundle created', detail: { bytes: result.bytes } });
+    return result;
+  });
+
   handle(IPC.TRANSCRIBE_CANCEL, async (event) => {
     const job = jobs.get(event.sender.id);
     if (job) {
@@ -786,6 +1044,222 @@ function registerIpc() {
   });
 }
 
+/**
+ * Self-contained productization acceptance test.
+ *
+ * Runs the whole expert workflow end to end through the real services - the
+ * same code the IPC handlers and the renderer drive - on a generated synthetic
+ * recording, without a speech model:
+ *
+ *   intake (assignment) -> import -> transcribe (injected deterministic ASR) ->
+ *   expert edit -> delivery package -> report export -> archive -> restore ->
+ *   integrity re-verification
+ *
+ * It also injects a mid-transcription failure and asserts the run closes as
+ * FAILED (lifecycle) and that the reviewed human revision is never silently
+ * overwritten by a later machine run (revision safety). Every assertion is a
+ * real call returning real data.
+ */
+async function runBusinessCaseTest() {
+  const report = { ok: false, steps: [] };
+  const step = (name, ok, detail) => {
+    report.steps.push({ name, ok, detail });
+    if (process.env.FT_VERBOSE) process.stderr.write(`[business] ${ok ? 'ok' : 'FAIL'} ${name}${detail ? ` :: ${detail}` : ''}\n`);
+  };
+  const os = require('node:os');
+  const zlib = require('node:zlib');
+  const { writeCaseArchive, restoreCaseArchive, verifyCaseArchive } = require('./services/case-archive');
+  const { buildDeliveryPackage } = require('./services/delivery');
+  const { readTar } = require('./services/tar');
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-business-'));
+
+  try {
+    // A small deterministic ASR adapter: no model, no external process. It
+    // returns the same output shape a real run produces, so the storage and
+    // revision logic is exercised for real.
+    const fakeAdapter = {
+      describe: () => ({ engine: 'whisper.cpp', binaryPath: 'fake' }),
+      version: async () => 'fake-1.0',
+      parseOutput: (prefix) => {
+        const raw = JSON.parse(fs.readFileSync(`${prefix}.json`, 'utf8'));
+        const segments = raw.transcription.map((t, i) => ({
+          segment_id: `SEG-${i}`,
+          start: t.t0 / 1000,
+          end: t.t1 / 1000,
+          speaker: 'SPEAKER_01',
+          text: t.text,
+          status: 'AUTOMATIC',
+          confidence: t.p,
+          words: null,
+        }));
+        return { segments, language: 'tr' };
+      },
+      transcribe: async ({ outputPrefix }) => {
+        if (fakeAdapter._failNext) {
+          fakeAdapter._failNext = false;
+          throw new Error('injected decoder failure');
+        }
+        const tokens = [
+          { text: 'Merhaba', t0: 0, t1: 700, p: 0.94 },
+          { text: 'dünya', t0: 700, t1: 1400, p: 0.88 },
+          { text: 'ikinci', t0: 1500, t1: 2200, p: 0.7 },
+          { text: 'cümle', t0: 2200, t1: 2900, p: 0.55 },
+        ];
+        fs.writeFileSync(`${outputPrefix}.json`, JSON.stringify({ transcription: tokens }));
+        return { outputPrefix };
+      },
+    };
+    const originalAdapter = whisper;
+    whisper = fakeAdapter;
+
+    const kase = storage.createCase({
+      title: 'Business case',
+      file_number: '2026/42',
+      authority: 'Ankara 1. Asliye Ceza',
+      requested_questions: 'Kayıtta ne konuşulmuş?',
+      due_date: '2026-12-31',
+    });
+    step('intake: assignment stored', kase.file_number === '2026/42' && kase.requested_questions === 'Kayıtta ne konuşulmuş?');
+
+    // A real 1-second, 8 kHz mono 16-bit WAV generated in-process.
+    const wavPath = path.join(workDir, 'ornek.wav');
+    const sampleRate = 8000;
+    const data = Buffer.alloc(sampleRate * 2);
+    for (let i = 0; i < sampleRate; i += 1) {
+      data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 12000), i * 2);
+    }
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + data.length, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * 2, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(data.length, 40);
+    fs.writeFileSync(wavPath, Buffer.concat([header, data]));
+
+    const meta = await media.probe(wavPath);
+    const ev = await storage.importEvidence(kase.case_id, wavPath, meta);
+    step('import: evidence recorded with hash', /^[0-9a-f]{64}$/.test(ev.sha256) && ev.size_bytes > 44);
+    step('import: metadata read by the real decoder', ev.duration_seconds > 0 && ev.sample_rate === 8000);
+
+    const run1 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    const out1 = await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run1') });
+    const segs1 = whisper.parseOutput(out1.outputPrefix).segments;
+    const saved1 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: segs1, source: 'asr', runId: run1,
+    });
+    storage.finishTranscriptionRun(run1, { status: 'SUCCEEDED' });
+    const done1 = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id).find((r) => r.run_id === run1);
+    step('transcribe: run SUCCEEDED with a finish time', done1.status === 'SUCCEEDED' && Boolean(done1.finished_at));
+    step('transcribe: machine segments produced', saved1.segments.length >= 1);
+    step('transcribe: machine revision is current on first run', saved1.revisionBecameCurrent === true);
+
+    const firstId = saved1.segments[0].segment_id;
+    const edited = saved1.segments.map((sg) => ({
+      segment_id: sg.segment_id, start: sg.start, end: sg.end, speaker: sg.speaker,
+      text: sg.segment_id === firstId ? 'Düzeltilmiş açılış' : sg.text,
+      original_text: sg.original_text, status: 'VERIFIED',
+      confidence: sg.confidence, words: sg.words, flags: [],
+    }));
+    const saved2 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: edited, source: 'review',
+    });
+    step('review: edit saved as VERIFIED human revision', saved2.segments[0].status === 'VERIFIED' && saved2.segments[0].text === 'Düzeltilmiş açılış');
+
+    const run2 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    const out2 = await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run2') });
+    const segs2 = whisper.parseOutput(out2.outputPrefix).segments.map((sg, i) => ({ ...sg, segment_id: `R2-${i}` }));
+    const saved3 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: segs2, source: 'asr', runId: run2,
+    });
+    storage.finishTranscriptionRun(run2, { status: 'SUCCEEDED' });
+    step('re-transcription: machine run does not become current', saved3.revisionBecameCurrent === false);
+    const tid = storage.getTranscript(kase.case_id, ev.evidence_id).transcript_id;
+    const after = storage.getSegments(tid);
+    step('re-transcription: human VERIFIED text preserved', after[0].text === 'Düzeltilmiş açılış' && after[0].status === 'VERIFIED');
+    const revs = storage.listRevisions(tid);
+    step('re-transcription: both revisions stored', revs.length >= 2);
+
+    const run3 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    fakeAdapter._failNext = true;
+    let failed = false;
+    try {
+      await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run3') });
+    } catch (err) {
+      failed = true;
+      storage.finishTranscriptionRun(run3, { status: 'FAILED', errorCode: 'ASR_FAILED', errorMessage: err.message });
+    }
+    const run3row = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id).find((r) => r.run_id === run3);
+    step('failure: injected decoder error surfaced', failed === true);
+    step('failure: run closed FAILED with finish time', run3row.status === 'FAILED' && Boolean(run3row.finished_at));
+    const allRuns = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id);
+    step('lifecycle: no orphan STARTED run remains', allRuns.every((r) => r.status !== 'STARTED'));
+
+    const delivery = await buildDeliveryPackage({ storage, caseId: kase.case_id, engineInfo: currentEngineInfo() });
+    const entries = readTar(zlib.gunzipSync(delivery.buffer)).map((e) => e.name);
+    step('delivery: package built', delivery.buffer.length > 0);
+    step('delivery: manifest and report included',
+      entries.includes('manifest.json') && entries.includes('report/report.docx') && entries.includes('report/report.pdf'));
+    step('delivery: transcript included', entries.some((n) => n.startsWith('transcript/')));
+
+    const built = await buildReportForCase(kase.case_id);
+    const docx = reportToDocx(built);
+    const pdf = reportToPdf(built);
+    step('report: docx and pdf produced', docx.length > 0 && pdf.length > 0);
+    step('report: checklist computed', Boolean(built.checklist && Array.isArray(built.checklist.items)));
+
+    const archivePath = path.join(workDir, 'case.ftcase.tar.gz');
+    const archived = await writeCaseArchive({ storage, caseId: kase.case_id, destPath: archivePath });
+    const buffer = fs.readFileSync(archivePath);
+    step('archive: written and verifies', archived.bytes > 0 && verifyCaseArchive(buffer).ok === true);
+    const restored = await restoreCaseArchive({ storage, buffer });
+    step('restore: created as a new case', restored.caseId !== kase.case_id);
+    const restoredEvidence = storage.listEvidence(restored.caseId);
+    step('restore: evidence count preserved', restoredEvidence.length === storage.listEvidence(kase.case_id).length);
+    step('restore: evidence hash preserved', restoredEvidence[0].sha256 === ev.sha256);
+    const rTranscript = storage.getTranscript(restored.caseId, restoredEvidence[0].evidence_id);
+    const rRevs = rTranscript ? storage.listRevisions(rTranscript.transcript_id) : [];
+    step('restore: transcript revisions preserved', rRevs.length === revs.length && rRevs.length >= 2);
+    const rCurrent = rTranscript ? storage.getCurrentRevisionInfo(rTranscript.transcript_id) : null;
+    step('restore: current human revision preserved', Boolean(rCurrent) && rCurrent.state === 'VERIFIED');
+    const restoredRuns = storage.listTranscriptionRuns(restored.caseId, restoredEvidence[0].evidence_id);
+    step('restore: transcription runs preserved', restoredRuns.length === allRuns.length);
+
+    const integrity = await verifyEvidenceIntegrity(storage.listEvidence(kase.case_id));
+    step('integrity: original re-verifies OK', integrity.length === 1 && integrity[0].status === 'OK');
+
+    whisper = originalAdapter;
+    report.ok = report.steps.every((s) => s.ok);
+  } catch (err) {
+    report.error = err && err.stack ? err.stack : (err && err.message ? err.message : String(err));
+  }
+
+  process.stdout.write(`BUSINESS_RESULT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
+  app.exit(report.ok ? 0 : 1);
+}
+
+
 async function bootstrap() {
   await app.whenReady();
 
@@ -825,6 +1299,11 @@ async function bootstrap() {
 
   if (process.argv.includes('--engine-report')) {
     await runEngineReport();
+    return;
+  }
+
+  if (process.argv.includes('--business-case-test')) {
+    await runBusinessCaseTest();
     return;
   }
 
@@ -1139,7 +1618,7 @@ async function runAcceptanceTest() {
 
     await uiStep('editing through the UI marks the segment EDITED', `(async () => {
       const seg = document.querySelector('#transcript-list .seg.active');
-      const editBtn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Edit');
+      const editBtn = seg.querySelector('.seg-actions button[data-action="edit"]');
       if (!editBtn) return { __error: 'Edit action not found' };
       editBtn.click();
       await new Promise((r) => setTimeout(r, 200));
@@ -1156,7 +1635,7 @@ async function runAcceptanceTest() {
     await uiStep('speaker can be changed through the UI', `(async () => {
       const before = document.querySelector('#transcript-list .seg.active .speaker').textContent.trim();
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Speaker');
+      const btn = seg.querySelector('.seg-actions button[data-action="speaker"]');
       if (!btn) return { __error: 'Speaker action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 250));
@@ -1167,7 +1646,7 @@ async function runAcceptanceTest() {
     await uiStep('split through the UI adds a segment', `(async () => {
       const before = document.querySelectorAll('#transcript-list .seg').length;
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Split'));
+      const btn = seg.querySelector('.seg-actions button[data-action="split"]');
       if (!btn) return { __error: 'Split action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 300));
@@ -1177,7 +1656,7 @@ async function runAcceptanceTest() {
     await uiStep('merge through the UI removes a segment', `(async () => {
       const before = document.querySelectorAll('#transcript-list .seg').length;
       const seg = document.querySelector('#transcript-list .seg.active');
-      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Merge'));
+      const btn = seg.querySelector('.seg-actions button[data-action="merge"]');
       if (!btn) return { __error: 'Merge action not found' };
       btn.click();
       await new Promise((r) => setTimeout(r, 300));
@@ -1202,6 +1681,97 @@ async function runAcceptanceTest() {
       document.getElementById('btn-run-export').click();
       await new Promise((r) => setTimeout(r, 1800));
       return true;
+    })()`);
+
+    // Productization surface: the dashboard, per-segment flags, filtering and
+    // the notes/report panels must all be wired and functional, not just present.
+    await uiStep('case dashboard shows live counts', `(async () => {
+      const grid = document.getElementById('dash-grid');
+      if (!grid || !grid.querySelector('dd')) return { __error: 'dashboard did not render' };
+      const evidence = grid.querySelector('[data-metric="evidence"]');
+      return Boolean(evidence && Number(evidence.textContent) >= 1);
+    })()`);
+
+    await uiStep('flags filter and search highlight work', `(async () => {
+      const seg = document.querySelector('#transcript-list .seg.active');
+      if (!seg) return { __error: 'no active segment' };
+      const flagBtn = seg.querySelector('.seg-actions button[data-action="flag-UNCLEAR"]');
+      if (!flagBtn) return { __error: 'flag action not found' };
+      flagBtn.click();
+      await new Promise((r) => setTimeout(r, 250));
+      const flagged = document.querySelector('#transcript-list .seg.active');
+      if (!flagged.classList.contains('flagged')) return { __error: 'segment not marked flagged' };
+      const filter = document.getElementById('select-filter');
+      filter.value = 'unclear';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      const note = document.getElementById('filter-note');
+      if (note.classList.contains('hidden')) return { __error: 'filter note did not appear' };
+      const visible = document.querySelectorAll('#transcript-list .seg').length;
+      filter.value = 'all';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      return document.querySelectorAll('#transcript-list .seg').length >= visible;
+    })()`);
+
+    await uiStep('notes panel adds a note', `(async () => {
+      document.getElementById('btn-notes').click();
+      await new Promise((r) => setTimeout(r, 500));
+      const dlg = document.getElementById('dialog-notes');
+      if (!dlg.open) return { __error: 'notes dialog did not open' };
+      document.getElementById('note-body').value = 'UI notu';
+      document.getElementById('btn-add-note').click();
+      await new Promise((r) => setTimeout(r, 700));
+      const rows = [...document.querySelectorAll('#notes-list .note-row .body')];
+      const ok = rows.some((b) => b.textContent.includes('UI notu'));
+      dlg.close();
+      return ok;
+    })()`);
+
+    await uiStep('report checklist renders through the UI', `(async () => {
+      document.getElementById('btn-report').click();
+      await new Promise((r) => setTimeout(r, 900));
+      const dlg = document.getElementById('dialog-report');
+      if (!dlg.open) return { __error: 'report dialog did not open' };
+      const items = document.querySelectorAll('#report-checklist li');
+      const ok = items.length > 0 && !items[0].textContent.includes('unavailable');
+      dlg.close();
+      return ok;
+    })()`);
+
+    // Productization surface: the eight-step workflow and the runtime panel
+    // (available / selected / actually-used) must render from live state.
+    await uiStep('workflow stepper renders eight steps', `(async () => {
+      return document.querySelectorAll('#workflow-list .wf-step').length === 8;
+    })()`);
+
+    await uiStep('runtime panel separates available/selected/used', `(async () => {
+      const chips = [...document.querySelectorAll('#runtime-panel .runtime-chip')];
+      if (chips.length !== 3) return { __error: 'expected 3 runtime chips, got ' + chips.length };
+      const labels = chips.map((c) => c.querySelector('.runtime-chip-label').textContent.trim());
+      return new Set(labels).size === 3;
+    })()`);
+
+    // Language switch: the static markup must follow the selected locale and
+    // the preference must persist through the real IPC surface.
+    await uiStep('language switch re-renders the markup', `(async () => {
+      const sel = document.getElementById('select-locale');
+      const target = document.getElementById('btn-new-case');
+      sel.value = 'en';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 400));
+      const en = target.textContent.trim();
+      sel.value = 'tr';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 400));
+      const tr = target.textContent.trim();
+      if (en === tr) return { __error: 'label did not change with locale' };
+      return document.documentElement.lang === 'tr';
+    })()`);
+
+    await uiStep('locale preference persisted', `(async () => {
+      const res = await window.ft.preferences.all();
+      return Boolean(res && res.ok && res.data && res.data.locale === 'tr');
     })()`);
 
     // No uncaught renderer error may have accumulated during the whole run.
@@ -1466,7 +2036,7 @@ app.on('before-quit', () => {
 // Self-test modes are one-shot: two of them must be able to run concurrently
 // (for example the release gate running smoke and engine-report in sequence)
 // without the single-instance lock making the second one exit silently.
-const SELF_TEST_FLAGS = ['--smoke-test', '--acceptance-test', '--multi-evidence-test', '--engine-report'];
+const SELF_TEST_FLAGS = ['--smoke-test', '--acceptance-test', '--multi-evidence-test', '--engine-report', '--business-case-test'];
 const isSelfTest = process.argv.some((a) => SELF_TEST_FLAGS.includes(a));
 const gotLock = isSelfTest ? true : app.requestSingleInstanceLock();
 if (!gotLock) {

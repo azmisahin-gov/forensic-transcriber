@@ -103,6 +103,8 @@ test('the other renderer libs define their globals in the browser', () => {
     ['lib/format.js', 'FT_FORMAT'],
     ['lib/audio.js', 'FT_AUDIO'],
     ['lib/waveform.js', 'FT_WAVEFORM'],
+    ['lib/search.js', 'FT_SEARCH'],
+    ['lib/shortcuts.js', 'FT_SHORTCUTS'],
   ];
   for (const [rel, globalName] of libs) {
     const sandbox = runAsBrowserScript(path.join(REPO_ROOT, 'src', 'renderer', rel), {});

@@ -15,57 +15,61 @@
         <span class="logo" aria-hidden="true">FT</span>
         <div class="brand-text">
           <strong>Forensic Transcriber</strong>
-          <span id="scope-label">56.12 Local Transcription Workbench</span>
+          <span id="scope-label">56.12 Yerel Transkripsiyon Çalışma İstasyonu</span>
         </div>
       </div>
       <div class="topbar-actions">
-        <span id="model-badge" class="badge badge-muted">Checking model…</span>
+        <span id="model-badge" class="badge badge-muted" data-i18n="badge.modelChecking">Model denetleniyor…</span>
         <span id="update-badge" class="badge badge-muted hidden"></span>
         <span id="app-version" class="muted small mono" title="Application version"></span>
-        <button id="btn-update" class="btn btn-ghost hidden" type="button">Update</button>
-        <button id="btn-about" class="btn btn-ghost" type="button">About</button>
-        <button id="btn-models" class="btn btn-ghost" type="button">Models</button>
-        <button id="btn-new-case" class="btn btn-primary" type="button">New case</button>
+        <label class="field field-inline lang-field">
+          <span data-i18n="app.language">Dil</span>
+          <select id="select-locale" aria-label="Language">
+            <option value="tr">Türkçe</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <button id="btn-update" class="btn btn-ghost hidden" type="button" data-i18n="app.update">Güncelle</button>
+        <button id="btn-about" class="btn btn-ghost" type="button" data-i18n="app.about">Hakkında</button>
+        <button id="btn-models" class="btn btn-ghost" type="button" data-i18n="app.models">Modeller</button>
+        <button id="btn-new-case" class="btn btn-primary" type="button" data-i18n="app.newCase">Yeni Dosya</button>
       </div>
     </header>
 
     <nav class="sidebar" aria-label="Cases">
       <div class="sidebar-head">
-        <h2>Cases</h2>
+        <h2 data-i18n="nav.cases">DOSYALAR</h2>
         <button id="btn-refresh-cases" class="btn btn-icon" title="Refresh" type="button">⟳</button>
       </div>
       <ul id="case-list" class="case-list"></ul>
       <div class="sidebar-foot">
         <div id="storage-info" class="muted small"></div>
-        <button id="btn-open-datadir" class="btn btn-ghost btn-small" type="button" title="Open the folder where cases, evidence copies and exports are stored on this computer">Open data folder</button>
+        <button id="btn-open-datadir" class="btn btn-ghost btn-small" type="button" data-i18n="nav.openDataFolder" title="Open the folder where cases, evidence copies and exports are stored on this computer">Veri klasörünü aç</button>
       </div>
     </nav>
 
     <main class="workspace">
       <section id="empty-state" class="empty-state">
-        <h1>Local-first transcription workspace</h1>
-        <p class="lede">For 56.12 audio transcription workflows. No cloud. No account. No API key.</p>
+        <h1 data-i18n="empty.title">Yerel transkripsiyon çalışma alanı</h1>
+        <p class="lede" data-i18n="empty.lede">56.12 ses kayıtlarının metin haline dönüştürülmesi için. Bulut yok. Hesap yok. API anahtarı yok.</p>
         <ol class="flow">
-          <li>Create a case</li>
-          <li>Import a recording</li>
-          <li>Transcribe locally</li>
-          <li>Review against the audio</li>
-          <li>Edit, verify and export</li>
+          <li data-i18n="empty.step1">Dosya oluştur</li>
+          <li data-i18n="empty.step2">Kayıt ekle</li>
+          <li data-i18n="empty.step3">Yerel transkripsiyon</li>
+          <li data-i18n="empty.step4">Sesle birlikte incele</li>
+          <li data-i18n="empty.step5">Düzenle, doğrula ve dışa aktar</li>
         </ol>
-        <p class="muted small">
-          This software is a technical transcription and review aid. It does not itself constitute a
-          forensic opinion, legal assessment, speaker identification, or authenticity determination.
+        <p class="muted small" data-i18n="empty.disclaimer">
+          Bu yazılım teknik bir transkripsiyon ve inceleme aracıdır. Tek başına bilirkişi kanaati, hukuki değerlendirme, konuşmacı kimliği veya orijinallik tespiti oluşturmaz.
         </p>
         <div id="first-run-model" class="first-run hidden">
-          <h2>Step 1 — install a speech model</h2>
-          <p class="small">
-            No speech model is installed yet. The standard installer ships without one.
-            Download the recommended model (about 547&nbsp;MiB), or import the offline model package
-            you downloaded, to begin transcribing.
+          <h2 data-i18n="empty.firstRunTitle">Adım 1 — bir konuşma modeli kurun</h2>
+          <p class="small" data-i18n="empty.firstRunBody">
+            Kurulu bir konuşma modeli yok. Standart kurulum model içermez. Başlamak için önerilen modeli indirin (yaklaşık 547 MiB) veya çevrimdışı model paketini içe aktarın.
           </p>
           <div class="first-run-actions">
-            <button id="btn-first-run-install" class="btn btn-primary" type="button">Install recommended model</button>
-            <button id="btn-first-run-models" class="btn" type="button">Open Models</button>
+            <button id="btn-first-run-install" class="btn btn-primary" type="button" data-i18n="empty.installRecommended">Önerilen modeli kur</button>
+            <button id="btn-first-run-models" class="btn" type="button" data-i18n="empty.openModels">Modelleri aç</button>
           </div>
         </div>
       </section>
@@ -77,29 +81,48 @@
             <div id="case-subtitle" class="muted small"></div>
           </div>
           <div class="case-header-actions">
-            <button id="btn-archive-export" class="btn" type="button">Back up case…</button>
-            <button id="btn-archive-import" class="btn" type="button">Restore case…</button>
-            <button id="btn-save" class="btn btn-primary" type="button" disabled>Save</button>
-            <button id="btn-export" class="btn" type="button" disabled>Export</button>
+            <button id="btn-notes" class="btn" type="button" data-i18n="case.notes">Notlar…</button>
+            <button id="btn-report" class="btn" type="button" data-i18n="case.report">Rapor…</button>
+            <button id="btn-delivery" class="btn" type="button" data-i18n="case.delivery">Teslim paketi…</button>
+            <button id="btn-support" class="btn" type="button" data-i18n="case.support">Destek paketi…</button>
+            <button id="btn-archive-export" class="btn" type="button" data-i18n="case.backup">Dosyayı yedekle…</button>
+            <button id="btn-archive-import" class="btn" type="button" data-i18n="case.restore">Dosyayı geri yükle…</button>
+            <button id="btn-save" class="btn btn-primary" type="button" disabled data-i18n="case.save">Kaydet</button>
+            <button id="btn-export" class="btn" type="button" disabled data-i18n="case.export">Dışa aktar</button>
           </div>
         </div>
+
+        <nav id="workflow-stepper" class="workflow-stepper" aria-label="Workflow">
+          <ol id="workflow-list"></ol>
+        </nav>
+
+        <section id="case-dashboard" class="case-dashboard" aria-label="Case dashboard">
+          <div class="dash-head">
+            <h2 data-i18n="case.dashboard">Dosya özeti</h2>
+            <span id="dash-updated" class="muted small"></span>
+          </div>
+          <dl id="dash-grid" class="dash-grid"></dl>
+          <div class="dash-actions">
+            <button id="btn-edit-case" class="btn btn-small" type="button" data-i18n="case.editAssignment">Görevlendirmeyi düzenle…</button>
+          </div>
+        </section>
 
         <div class="panes">
           <aside class="evidence-pane">
             <div class="pane-head">
-              <h2>Evidence</h2>
-              <button id="btn-import" class="btn btn-small" type="button">Import</button>
+              <h2 data-i18n="evidence.heading">İNCELENEN MEDYA</h2>
+              <button id="btn-import" class="btn btn-small" type="button" data-i18n="evidence.import">Materyal ekle</button>
             </div>
             <ul id="evidence-list" class="evidence-list"></ul>
             <div id="drop-zone" class="drop-zone">
-              <p>Drop audio or video here</p>
-              <p class="muted small">WAV · MP3 · M4A · FLAC · OGG · MP4 · MOV · MKV</p>
+              <p data-i18n="evidence.dropHint">Ses veya görüntü dosyasını buraya bırakın</p>
+              <p class="muted small" data-i18n="evidence.dropFormats">WAV · MP3 · M4A · FLAC · OGG · MP4 · MOV · MKV</p>
             </div>
           </aside>
 
           <div class="review-pane">
             <div id="review-placeholder" class="review-placeholder">
-              <p>Select an imported recording to inspect metadata and transcribe.</p>
+              <p data-i18n="evidence.selectPrompt">Meta verileri görmek ve transkripsiyon yapmak için bir kayıt seçin.</p>
             </div>
 
             <div id="review" class="review hidden">
@@ -107,45 +130,57 @@
                 <h3 id="ev-name">—</h3>
                 <dl class="meta-grid" id="ev-meta"></dl>
                 <div class="meta-actions">
-                  <button id="btn-reveal" class="btn btn-small" type="button">Show original</button>
-                  <button id="btn-delete-evidence" class="btn btn-small btn-danger" type="button">Remove</button>
+                  <button id="btn-reveal" class="btn btn-small" type="button" data-i18n="evidence.showOriginal">Orijinali göster</button>
+                  <button id="btn-delete-evidence" class="btn btn-small btn-danger" type="button" data-i18n="evidence.remove">Kaldır</button>
                 </div>
               </section>
 
               <section class="transcribe-panel">
                 <div class="transcribe-row">
                   <label class="field">
-                    <span>Model</span>
+                    <span data-i18n="transcribe.model">Model</span>
                     <select id="select-model"></select>
                   </label>
                   <label class="field field-inline">
                     <input type="checkbox" id="chk-gpu" checked />
-                    <span>Use GPU if available</span>
+                    <span data-i18n="transcribe.useGpu">Varsa GPU kullan</span>
                   </label>
                   <label class="field field-inline">
                     <input type="checkbox" id="chk-vad" checked />
-                    <span>Voice activity detection</span>
+                    <span data-i18n="transcribe.vad">Ses etkinliği algılama (VAD)</span>
                   </label>
-                  <button id="btn-transcribe" class="btn btn-primary" type="button">Transcribe</button>
-                  <button id="btn-cancel" class="btn btn-danger hidden" type="button">Cancel</button>
+                  <button id="btn-transcribe" class="btn btn-primary" type="button" data-i18n="transcribe.start">Transkripsiyon</button>
+                  <button id="btn-cancel" class="btn btn-danger hidden" type="button" data-i18n="transcribe.cancel">İptal</button>
                 </div>
+                <div id="runtime-panel" class="runtime-panel" aria-label="Runtime"></div>
                 <p id="engine-status" class="engine-status small muted"></p>
                 <div id="progress-wrap" class="progress-wrap hidden">
                   <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
-                  <span id="progress-label" class="small muted">Preparing…</span>
+                  <span id="progress-label" class="small muted" data-i18n="transcribe.preparing">Hazırlanıyor…</span>
                 </div>
-                <p id="transcribe-error" class="error hidden"></p>
+                <div id="transcribe-error" class="error-box hidden" role="alert">
+                  <div class="error-box-head">
+                    <strong id="transcribe-error-title" data-i18n="error.transcriptionFailed">Transkripsiyon başarısız</strong>
+                  </div>
+                  <p id="transcribe-error-body" class="small" data-i18n="error.transcriptionFailedBody"></p>
+                  <pre id="transcribe-error-detail" class="error-detail hidden"></pre>
+                  <div class="error-box-actions">
+                    <button id="btn-transcribe-retry" class="btn btn-small btn-primary" type="button" data-i18n="progress.retry">Tekrar dene</button>
+                    <button id="btn-transcribe-error-details" class="btn btn-small" type="button" data-i18n="progress.errorDetail">Teknik ayrıntılar</button>
+                    <button id="btn-transcribe-error-close" class="btn btn-small btn-ghost" type="button" data-i18n="progress.close">Kapat</button>
+                  </div>
+                </div>
               </section>
 
               <section class="player-panel">
                 <canvas id="waveform" class="waveform" height="96"></canvas>
                 <div class="player-controls">
-                  <button id="btn-play" class="btn btn-icon" title="Play / Pause (Space)" type="button">▶</button>
-                  <button id="btn-back5" class="btn btn-icon" title="Back 5s (←)" type="button">−5s</button>
-                  <button id="btn-fwd5" class="btn btn-icon" title="Forward 5s (→)" type="button">+5s</button>
+                  <button id="btn-play" class="btn btn-icon" data-i18n-attr="title:player.play" title="Oynat / Duraklat (Boşluk)" type="button">▶</button>
+                  <button id="btn-back5" class="btn btn-icon" data-i18n-attr="title:player.back" title="5 sn geri (←)" type="button">−5s</button>
+                  <button id="btn-fwd5" class="btn btn-icon" data-i18n-attr="title:player.forward" title="5 sn ileri (→)" type="button">+5s</button>
                   <span id="time-display" class="mono">00:00:00.000</span>
                   <label class="field field-inline">
-                    <span>Speed</span>
+                    <span data-i18n="player.speed">Hız</span>
                     <select id="select-speed">
                       <option value="0.5">0.5×</option>
                       <option value="0.75">0.75×</option>
@@ -157,7 +192,7 @@
                   </label>
                   <span class="spacer"></span>
                   <label class="field field-inline">
-                    <span>Speakers</span>
+                    <span data-i18n="player.speakers">Konuşmacılar</span>
                     <input id="speaker-input" class="input input-small" type="text" placeholder="SPEAKER_01,SPEAKER_02" />
                   </label>
                 </div>
@@ -165,12 +200,25 @@
 
               <section class="transcript-panel">
                 <div class="transcript-toolbar">
-                  <h3>Transcript</h3>
+                  <h3 data-i18n="transcript.heading">Transkript</h3>
                   <span id="transcript-stats" class="muted small"></span>
                   <span class="spacer"></span>
-                  <button id="btn-undo" class="btn btn-small" title="Undo (Ctrl+Z)" type="button" disabled>Undo</button>
-                  <button id="btn-redo" class="btn btn-small" title="Redo (Ctrl+Shift+Z)" type="button" disabled>Redo</button>
+                  <label class="field field-inline">
+                    <span data-i18n="transcript.filter">Filtre</span>
+                    <select id="select-filter">
+                      <option value="all" data-i18n="transcript.filterAll">Tüm segmentler</option>
+                      <option value="unclear" data-i18n="transcript.filterUnclear">Belirsiz / işaretli</option>
+                      <option value="unreviewed" data-i18n="transcript.filterUnreviewed">İncelenmemiş (makine)</option>
+                      <option value="low-confidence" data-i18n="transcript.filterLowConfidence">Düşük güven</option>
+                      <option value="edited" data-i18n="transcript.filterEdited">Düzenlenen</option>
+                      <option value="verified" data-i18n="transcript.filterVerified">Doğrulanan</option>
+                    </select>
+                  </label>
+                  <input id="search-input" class="input input-small" type="search" data-i18n-attr="placeholder:transcript.search" placeholder="Bu transkriptte ara…" />
+                  <button id="btn-undo" class="btn btn-small" data-i18n-attr="title:transcript.undo" title="Geri al (Ctrl+Z)" type="button" disabled data-i18n="transcript.undo">Geri al</button>
+                  <button id="btn-redo" class="btn btn-small" data-i18n-attr="title:transcript.redo" title="Yinele (Ctrl+Shift+Z)" type="button" disabled data-i18n="transcript.redo">Yinele</button>
                 </div>
+                <p id="filter-note" class="muted small hidden"></p>
                 <div id="transcript-list" class="transcript-list"></div>
               </section>
             </div>
@@ -184,87 +232,97 @@
 
   <dialog id="dialog-new-case" class="dialog">
     <form method="dialog">
-      <h2>New case</h2>
-      <label class="field"><span>Title</span><input id="new-case-title" class="input" required maxlength="200" /></label>
-      <label class="field"><span>Notes</span><textarea id="new-case-notes" class="input" rows="3"></textarea></label>
+      <h2 data-i18n="newCase.title">Yeni dosya</h2>
+      <label class="field"><span data-i18n="field.title">Başlık</span><input id="new-case-title" class="input" required maxlength="200" /></label>
+      <label class="field"><span data-i18n="field.notes">Notlar</span><textarea id="new-case-notes" class="input" rows="3"></textarea></label>
       <menu>
-        <button value="cancel" class="btn">Cancel</button>
-        <button id="btn-create-case" value="default" class="btn btn-primary">Create</button>
+        <button value="cancel" class="btn" data-i18n="dialog.cancel">Vazgeç</button>
+        <button id="btn-create-case" value="default" class="btn btn-primary" data-i18n="newCase.create">Oluştur</button>
       </menu>
     </form>
   </dialog>
 
   <dialog id="dialog-models" class="dialog dialog-wide">
     <form method="dialog">
-      <h2>Models</h2>
-      <p class="muted small">Models are not bundled with the standard installer. Install a model package to begin.</p>
+      <h2 data-i18n="models.title">Modeller</h2>
+      <p class="muted small" data-i18n="models.body">Modeller standart kuruluma dahil değildir. Başlamak için bir model paketi kurun.</p>
       <div id="model-list" class="model-list"></div>
+      <div id="model-progress" class="model-progress hidden" role="status" aria-live="polite">
+        <div class="model-progress-head">
+          <strong id="model-progress-name">—</strong>
+          <span id="model-progress-stage" class="badge badge-muted">…</span>
+        </div>
+        <div class="progress-track"><div id="model-progress-bar" class="progress-bar"></div></div>
+        <div class="model-progress-meta">
+          <span id="model-progress-bytes" class="mono small"></span>
+          <span id="model-progress-speed" class="mono small"></span>
+          <span id="model-progress-eta" class="mono small"></span>
+        </div>
+        <p id="model-progress-result" class="small"></p>
+      </div>
       <menu>
-        <button value="cancel" class="btn">Close</button>
+        <button value="cancel" class="btn" data-i18n="dialog.close">Kapat</button>
       </menu>
     </form>
   </dialog>
 
   <dialog id="dialog-about" class="dialog dialog-wide">
     <form method="dialog">
-      <h2>About &amp; updates</h2>
+      <h2 data-i18n="about.title">Hakkında ve güncellemeler</h2>
       <dl class="about-grid" id="about-info"></dl>
       <div class="update-actions">
-        <button id="btn-diagnostics" class="btn btn-small" type="button">Diagnostics…</button>
+        <button id="btn-diagnostics" class="btn btn-small" type="button" data-i18n="about.diagnostics">Tanılama…</button>
       </div>
 
-      <h3>Application updates</h3>
-      <p class="muted small">
-        Updates are delivered from GitHub Releases over HTTPS. Nothing is downloaded or installed
-        without your action, and an update never touches your case data or your speech model.
+      <h3 data-i18n="about.updatesHeading">Uygulama güncellemeleri</h3>
+      <p class="muted small" data-i18n="about.updatesBody">
+        Güncellemeler GitHub Releases üzerinden HTTPS ile gelir. Sizin işleminiz olmadan hiçbir şey indirilmez veya kurulmaz; güncelleme dosya verilerinize veya konuşma modelinize dokunmaz.
       </p>
       <div id="update-panel" class="update-panel">
-        <p id="update-status" class="small muted">Not checked yet.</p>
+        <p id="update-status" class="small muted">…</p>
         <div id="update-progress-wrap" class="progress-wrap hidden">
           <div class="progress-track"><div id="update-progress-bar" class="progress-bar"></div></div>
           <span id="update-progress-label" class="small muted"></span>
         </div>
         <p id="update-error" class="error hidden"></p>
         <div class="update-actions">
-          <button id="btn-update-check" class="btn btn-small" type="button">Check for updates</button>
-          <button id="btn-update-download" class="btn btn-small btn-primary hidden" type="button">Download update</button>
-          <button id="btn-update-postpone" class="btn btn-small hidden" type="button">Postpone</button>
-          <button id="btn-update-install" class="btn btn-small btn-primary hidden" type="button">Restart and install</button>
-          <button id="btn-update-release-notes" class="btn btn-small btn-ghost hidden" type="button">Release page</button>
+          <button id="btn-update-check" class="btn btn-small" type="button" data-i18n="about.checkUpdates">Güncellemeleri denetle</button>
+          <button id="btn-update-download" class="btn btn-small btn-primary hidden" type="button" data-i18n="about.downloadUpdate">Güncellemeyi indir</button>
+          <button id="btn-update-postpone" class="btn btn-small hidden" type="button" data-i18n="about.postpone">Ertele</button>
+          <button id="btn-update-install" class="btn btn-small btn-primary hidden" type="button" data-i18n="about.installRestart">Yeniden başlat ve kur</button>
+          <button id="btn-update-release-notes" class="btn btn-small btn-ghost hidden" type="button" data-i18n="about.releasePage">Sürüm sayfası</button>
         </div>
       </div>
 
       <menu>
-        <button value="cancel" class="btn">Close</button>
+        <button value="cancel" class="btn" data-i18n="dialog.close">Kapat</button>
       </menu>
     </form>
   </dialog>
 
   <dialog id="dialog-diagnostics" class="dialog dialog-wide">
     <form method="dialog">
-      <h2>Diagnostics</h2>
-      <p class="muted small">
-        Technical details about the transcription engine. This is diagnostic information for
-        troubleshooting; it is not part of the transcription workflow.
+      <h2 data-i18n="diagnostics.title">Tanılama</h2>
+      <p class="muted small" data-i18n="diagnostics.body">
+        Transkripsiyon motoru hakkında teknik ayrıntılar. Bu bilgi sorun giderme amaçlıdır; transkripsiyon akışının parçası değildir.
       </p>
       <div class="update-actions">
-        <button id="btn-check-engine" class="btn btn-small" type="button">Check engine</button>
+        <button id="btn-check-engine" class="btn btn-small" type="button" data-i18n="diagnostics.checkEngine">Motoru denetle</button>
       </div>
-      <p id="diagnostics-engine-status" class="engine-status small muted">Not checked yet.</p>
+      <p id="diagnostics-engine-status" class="engine-status small muted">…</p>
       <dl class="about-grid" id="diagnostics-info"></dl>
       <menu>
-        <button value="cancel" class="btn">Close</button>
+        <button value="cancel" class="btn" data-i18n="dialog.close">Kapat</button>
       </menu>
     </form>
   </dialog>
 
   <dialog id="dialog-export" class="dialog">
     <form method="dialog">
-      <h2>Export transcript</h2>
-      <p class="muted small">Output is a working draft generated by this software, not an official report template.</p>
-      <p class="muted small">
-        Files are written to the case's <code>exports</code> folder. After exporting you can
-        open that folder directly.
+      <h2 data-i18n="export.title">Transkripti dışa aktar</h2>
+      <p class="muted small" data-i18n="export.body">Çıktı, bu yazılım tarafından üretilen bir çalışma taslağıdır; resmi rapor şablonu değildir.</p>
+      <p class="muted small" data-i18n="export.body2">
+        Dosyalar dosyanın exports klasörüne yazılır. Dışa aktardıktan sonra o klasörü doğrudan açabilirsiniz.
       </p>
       <div class="checkbox-row">
         <label><input type="checkbox" class="exp-format" value="json" checked /> JSON</label>
@@ -273,20 +331,115 @@
         <label><input type="checkbox" class="exp-format" value="html" checked /> HTML</label>
       </div>
       <menu>
-        <button value="cancel" class="btn">Cancel</button>
-        <button id="btn-open-exports" class="btn" type="button">Open exports folder</button>
-        <button id="btn-run-export" value="default" class="btn btn-primary">Export</button>
+        <button value="cancel" class="btn" data-i18n="dialog.cancel">Vazgeç</button>
+        <button id="btn-open-exports" class="btn" type="button" data-i18n="export.openFolder">Exports klasörünü aç</button>
+        <button id="btn-run-export" value="default" class="btn btn-primary" data-i18n="export.run">Dışa aktar</button>
       </menu>
     </form>
   </dialog>
 
   <dialog id="dialog-confirm" class="dialog">
     <form method="dialog">
-      <h2 id="confirm-title">Confirm</h2>
+      <h2 id="confirm-title" data-i18n="confirm.title">Onayla</h2>
       <p id="confirm-message"></p>
       <menu>
-        <button value="cancel" class="btn">Cancel</button>
-        <button id="btn-confirm-yes" value="default" class="btn btn-danger">Confirm</button>
+        <button value="cancel" class="btn" data-i18n="confirm.cancel">Vazgeç</button>
+        <button id="btn-confirm-yes" value="default" class="btn btn-danger" data-i18n="confirm.yes">Onayla</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-case-edit" class="dialog">
+    <form method="dialog">
+      <h2 data-i18n="caseAssignment.title">Görevlendirme bilgileri</h2>
+      <label class="field"><span data-i18n="field.title">Başlık</span><input id="edit-case-title" class="input" maxlength="200" /></label>
+      <label class="field"><span data-i18n="field.fileNumber">Dosya numarası</span><input id="edit-case-file-number" class="input" maxlength="120" /></label>
+      <label class="field"><span data-i18n="field.authority">Merci</span><input id="edit-case-authority" class="input" maxlength="200" /></label>
+      <label class="field"><span data-i18n="field.caseType">Dosya türü</span><input id="edit-case-type" class="input" maxlength="120" /></label>
+      <label class="field"><span data-i18n="field.assignmentDate">Görevlendirme tarihi</span><input id="edit-case-assignment-date" class="input" type="date" /></label>
+      <label class="field"><span data-i18n="field.dueDate">Son tarih</span><input id="edit-case-due" class="input" type="date" /></label>
+      <label class="field"><span data-i18n="field.scope">İnceleme konusu</span><input id="edit-case-scope" class="input" maxlength="300" /></label>
+      <label class="field"><span data-i18n="field.assignmentDescription">Görevlendirme açıklaması</span><textarea id="edit-case-description" class="input" rows="2"></textarea></label>
+      <label class="field"><span data-i18n="field.requestedQuestions">Bilirkişiden istenen hususlar</span><textarea id="edit-case-questions" class="input" rows="3"></textarea></label>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="dialog.cancel">Vazgeç</button>
+        <button id="btn-save-case" value="default" class="btn btn-primary" data-i18n="case.save">Kaydet</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-notes" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="note.title">Dosya notları</h2>
+      <p class="muted small" data-i18n="note.privacy">Notlar yalnızca bu dosyanın içinde saklanır. Hiçbir yere gönderilmez.</p>
+      <ul id="notes-list" class="notes-list"></ul>
+      <label class="field"><span data-i18n="note.new">Yeni not</span><textarea id="note-body" class="input" rows="2" data-i18n-attr="placeholder:note.placeholder" placeholder="Bu kaydı ile ilgili gözlem…"></textarea></label>
+      <label class="field"><span data-i18n="note.category">Kategori (isteğe bağlı)</span><input id="note-category" class="input" maxlength="60" /></label>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="note.close">Kapat</button>
+        <button id="btn-add-note" value="default" class="btn btn-primary" data-i18n="note.add">Not ekle</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-report" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="report.title">Rapor</h2>
+      <p class="muted small" data-i18n="report.disclaimer">
+        Teknik bir iş ürünü. Makine çıktısını ve uzman tarafından incelenmiş metni, revizyon kaydıyla birlikte içerir; hukuki bir görüş değildir.
+      </p>
+      <div class="update-actions">
+        <button id="btn-report-build" class="btn btn-small" type="button" data-i18n="report.refresh">Kontrol listesini yenile</button>
+        <button id="btn-report-export" class="btn btn-small btn-primary" type="button" data-i18n="report.export">Raporu dışa aktar…</button>
+      </div>
+      <h3 data-i18n="report.checklist">Teslime hazırlık kontrol listesi</h3>
+      <ul id="report-checklist" class="checklist"></ul>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="report.close">Kapat</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-delivery" class="dialog">
+    <form method="dialog">
+      <h2 data-i18n="delivery.title">Teslim paketi</h2>
+      <p class="muted small" data-i18n="delivery.body">
+        Raporu, transkriptleri, teknik meta verileri ve özetleri tek bir dosyada toplar; alıcı neyin teslim edildiğini doğrulayabilir.
+      </p>
+      <label class="field field-inline"><input type="checkbox" id="chk-delivery-evidence" /><span data-i18n="delivery.includeEvidence">Materyal kopyalarını ekle (büyük)</span></label>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="delivery.cancel">Vazgeç</button>
+        <button id="btn-run-delivery" value="default" class="btn btn-primary" data-i18n="delivery.create">Paketi oluştur…</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-support" class="dialog">
+    <form method="dialog">
+      <h2 data-i18n="support.title">Destek paketi</h2>
+      <p class="muted small" data-i18n="support.body">
+        Teknik, gizliliği korunmuş bir paket (sürümler, motor/çalışma zamanı seçimi, tanılama ve son günlük). Transkript metni, ses veya materyal içermez.
+      </p>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="support.cancel">Vazgeç</button>
+        <button id="btn-run-support" value="default" class="btn btn-primary" data-i18n="support.save">Paketi kaydet…</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-import-progress" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="evidence.import">Materyal ekle</h2>
+      <div class="import-progress-head">
+        <span id="import-overall" class="small mono"></span>
+        <span class="spacer"></span>
+        <button id="btn-import-cancel" class="btn btn-small btn-danger" type="button" data-i18n="progress.cancelAll">Tümünü iptal et</button>
+        <button id="btn-import-retry" class="btn btn-small hidden" type="button" data-i18n="progress.retryFailed">Başarısızları yeniden dene</button>
+      </div>
+      <div class="progress-track"><div id="import-overall-bar" class="progress-bar"></div></div>
+      <ul id="import-queue" class="import-queue"></ul>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="progress.close">Kapat</button>
       </menu>
     </form>
   </dialog>
@@ -295,16 +448,22 @@
        the ones above it. shared/constants.js must load first: the transcript
        store reads FT_CONSTANTS at load time, and renderer.js uses it directly.
          FT_CONSTANTS      -> shared/constants.js
+         FT_I18N           -> shared/i18n.js       (no dependencies)
          FT_FORMAT         -> lib/format.js        (no dependencies)
          FT_TRANSCRIPT_STORE -> lib/transcript-store.js (needs FT_CONSTANTS)
          FT_AUDIO          -> lib/audio.js         (no dependencies)
          FT_WAVEFORM       -> lib/waveform.js      (no dependencies)
+         FT_SEARCH         -> lib/search.js        (no dependencies)
+         FT_SHORTCUTS      -> lib/shortcuts.js     (no dependencies)
          (no global)       -> renderer.js          (needs all of the above) -->
   <script src="../shared/constants.js"></script>
+  <script src="../shared/i18n.js"></script>
   <script src="lib/format.js"></script>
   <script src="lib/transcript-store.js"></script>
   <script src="lib/audio.js"></script>
   <script src="lib/waveform.js"></script>
+  <script src="lib/search.js"></script>
+  <script src="lib/shortcuts.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

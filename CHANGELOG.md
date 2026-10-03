@@ -7,6 +7,16 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- **56.12 expert work station (additive).** Case intake fields
+  (`file_number`, `authority`, `case_type`, `assignment_date`, `due_date`,
+  `assignment_description`, `requested_questions`, `scope`), a live case
+  dashboard, per-case notes/bookmarks, per-segment operator review flags
+  (`UNCLEAR`/`REVISIT`/`REVIEW`), transcript filtering and in-transcript search
+  highlighting, parametric report templates with a data-integrity verdict and a
+  delivery-readiness checklist (TXT/HTML/DOCX/PDF), a one-file delivery package
+  and a local redacted support bundle. All offline; no new runtime dependency.
+  Review flags never change segment text or status, and reports carry a
+  technical-work-product disclaimer (no legal assessment).
 - **Safe transcript revision semantics.** A transcript now keeps an
   append-only `transcript_revisions` history (`transcript_revisions` table,
   schema_version 4). A new ASR run records a new `MACHINE` revision linked to its
@@ -25,6 +35,13 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   provenance, atomic evidence import, fail-closed migration backup and
   binary-safe waveform (`tests/unit/p0-revision-lifecycle.test.js`,
   `tests/unit/p0-regression.test.js`).
+- **Full localization and i18n regression coverage.** Every remaining
+  hard-coded operator string (model import, DB integrity, case restore,
+  cancelling, drop-path error, engine check, postponed update, model badge,
+  play-from-here) now resolves through `t()`. The tr/en dictionaries are asserted
+  key-for-key identical (338 each), every `data-i18n` key in `index.html`
+  resolves in both locales, and an unknown locale falls back to Turkish
+  (`tests/unit/productization.test.js`).
 
 ### Fixed
 
@@ -45,7 +62,10 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
-- `schema_version` is now **4** (adds `evidence.audio_stream_count`).
+- `schema_version` is now **5** (adds `evidence.audio_stream_count`, the case
+  assignment fields `cases.*`, `notes`, `reports`, `preferences` and a local
+  diagnostics buffer; then adds `segments.flags_json`). Every step is an
+  additive, backed-up migration.
 - Case archive format is now **version 2** (adds revisions); version 1 archives
   still restore.
 - The atomic-evidence-import regression test no longer relies on POSIX directory

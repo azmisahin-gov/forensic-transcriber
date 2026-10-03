@@ -1,18 +1,23 @@
 'use strict';
 
-/* global FT_CONSTANTS, FT_FORMAT, FT_TRANSCRIPT_STORE, FT_AUDIO, FT_WAVEFORM */
+/* global FT_CONSTANTS, FT_I18N, FT_FORMAT, FT_TRANSCRIPT_STORE, FT_AUDIO, FT_WAVEFORM, FT_SEARCH */
 (function () {
   const { SEGMENT_STATUS } = FT_CONSTANTS;
   const { formatClock, formatBytes, formatDuration, relativeTime } = FT_FORMAT;
   const { TranscriptStore } = FT_TRANSCRIPT_STORE;
   const { AudioController } = FT_AUDIO;
   const { drawWaveform, resamplePeaks, xToTime } = FT_WAVEFORM;
+  const { FILTERS, filterSegments, highlightParts } = FT_SEARCH;
+  const { translate, normalize: normalizeLocale, DEFAULT_LOCALE } = FT_I18N;
+
+  const FLAG_OPTIONS = ['UNCLEAR', 'REVISIT', 'REVIEW'];
 
   const api = window.ft;
   const $ = (sel) => document.querySelector(sel);
 
   const state = {
     appInfo: null,
+    locale: DEFAULT_LOCALE,
     cases: [],
     caseRecord: null,
     evidence: [],
@@ -30,7 +35,55 @@
     pollTimer: null,
     engineProbe: null,
     lastRunMode: null,
+    dashboard: null,
+    notes: [],
+    report: null,
+    revisions: [],
+    searchQuery: '',
+    filter: FILTERS.ALL,
+    importQueue: [],
+    importActive: false,
   };
+
+  /** Translate with the active locale. */
+  function t(key, vars) {
+    return translate(state.locale, key, vars);
+  }
+
+  /**
+   * Apply every `data-i18n` / `data-i18n-attr` node in the document. Called once
+   * on boot and whenever the language changes, so the static markup follows the
+   * selected locale without a per-button maintenance burden.
+   */
+  function applyTranslations() {
+    document.documentElement.lang = state.locale;
+    for (const el of document.querySelectorAll('[data-i18n]')) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    }
+    for (const el of document.querySelectorAll('[data-i18n-attr]')) {
+      const spec = el.getAttribute('data-i18n-attr') || '';
+      for (const pair of spec.split(',')) {
+        const [attr, key] = pair.split(':').map((s) => s.trim());
+        if (attr && key) el.setAttribute(attr, t(key));
+      }
+    }
+  }
+
+  async function setLocale(locale) {
+    state.locale = normalizeLocale(locale);
+    const sel = $('#select-locale');
+    if (sel) sel.value = state.locale;
+    applyTranslations();
+    renderDashboard();
+    renderWorkflow();
+    renderRuntimePanel();
+    renderCaseList();
+    try {
+      await call(api.preferences.set('locale', state.locale));
+    } catch {
+      /* preference persistence is best-effort; the in-memory locale still applies */
+    }
+  }
 
   // ---------------------------------------------------------------- utilities
   async function call(promise) {
@@ -80,20 +133,32 @@
       state.appInfo = await call(api.app.info());
     } catch (err) {
       markBootFailed(`app.info failed: ${errText(err)}`);
-      toast(`Startup error: ${errText(err)}`, 'error');
+      toast(`${t('error.startup')}: ${errText(err)}`, 'error');
       return;
     }
     $('#scope-label').textContent = state.appInfo.scope;
     const versionEl = $('#app-version');
     if (versionEl) versionEl.textContent = `v${state.appInfo.version}`;
     updateModelBadge();
-    $('#storage-info').textContent =
-      `${state.appInfo.storage.cases} cases · ${state.appInfo.storage.evidence} files`;
+    // Locale must be resolved before the first dynamic render so counts and
+    // labels appear in the saved language on launch.
+    try {
+      const prefs = await call(api.preferences.all());
+      if (prefs && prefs.locale) state.locale = normalizeLocale(prefs.locale);
+    } catch {
+      /* preferences are optional */
+    }
+    applyTranslations();
+    const localeSel = $('#select-locale');
+    if (localeSel) localeSel.value = state.locale;
+    $('#storage-info').textContent = `${state.appInfo.storage.cases} ${t('nav.casesCount')} · ${state.appInfo.storage.evidence} ${t('nav.filesSuffix')}`;
     if (!state.appInfo.media.ffmpeg || !state.appInfo.media.ffprobe) {
-      toast('FFmpeg decoder not found. Import and transcription will not work.', 'error');
+      toast(t('error.ffmpegMissing'), 'error');
     }
     state.progressUnsub = api.transcribe.onProgress(handleProgress);
+    api.evidence.onImportProgress(handleImportProgress);
     initUpdaterUi();
+    renderRuntimePanel();
     await refreshModels();
     await refreshCases();
     markBootReady();
@@ -106,13 +171,15 @@
    * wired to handlers. A crashed renderer leaves this object absent or failed.
    */
   function markBootReady() {
-    const requiredGlobals = ['FT_CONSTANTS', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM'];
+    const requiredGlobals = ['FT_CONSTANTS', 'FT_I18N', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM', 'FT_SEARCH'];
     const missingGlobals = requiredGlobals.filter((name) => typeof window[name] === 'undefined');
     const requiredControls = [
       'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
       'btn-first-run-install', 'btn-first-run-models', 'btn-import',
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
+      'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
+      'select-locale',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -128,9 +195,12 @@
       failed: false,
       error: null,
       version: state.appInfo ? state.appInfo.version : null,
+      locale: state.locale,
       missingGlobals,
       controls,
       unwiredControlCount: unwired,
+      workflowSteps: document.querySelectorAll('#workflow-list .wf-step').length,
+      runtimeChips: document.querySelectorAll('#runtime-panel .runtime-chip').length,
       modelReady: Boolean(state.appInfo && state.appInfo.modelReady),
       at: new Date().toISOString(),
     };
@@ -161,14 +231,14 @@
   // Application auto-update UI. It never downloads or installs on its own; the
   // user chooses to download and separately chooses to restart and install.
   const UPDATE_LABELS = {
-    idle: 'No update action pending.',
-    checking: 'Checking for updates…',
-    'not-available': 'You have the latest version.',
-    available: 'An update is available.',
-    postponed: 'Update postponed. You can install it later.',
-    downloading: 'Downloading update…',
-    downloaded: 'Update downloaded. Restart to install it.',
-    error: 'The update could not be completed. Your current version still works.',
+    idle: 'update.idle',
+    checking: 'update.checking',
+    'not-available': 'update.notAvailable',
+    available: 'update.available',
+    postponed: 'update.postponed',
+    downloading: 'update.downloading',
+    downloaded: 'update.downloaded',
+    error: 'update.error',
   };
 
   function initUpdaterUi() {
@@ -189,9 +259,9 @@
     const notesBtn = $('#btn-update-release-notes');
     const progressWrap = $('#update-progress-wrap');
 
-    statusEl.textContent = UPDATE_LABELS[s.status] || s.status;
+    statusEl.textContent = t(UPDATE_LABELS[s.status] || s.status);
     if (s.availableVersion && s.status !== 'not-available') {
-      statusEl.textContent += ` (version ${s.availableVersion})`;
+      statusEl.textContent += ` (v${s.availableVersion})`;
     }
 
     const available = s.status === 'available';
@@ -200,7 +270,7 @@
     const downloaded = s.status === 'downloaded';
 
     badge.classList.toggle('hidden', !(available || postponed || downloaded));
-    badge.textContent = downloaded ? 'Update ready' : available || postponed ? 'Update available' : '';
+    badge.textContent = downloaded ? t('update.ready') : available || postponed ? t('update.availableShort') : '';
     badge.className = `badge ${downloaded ? 'badge-ok' : 'badge-warn'}`;
 
     btnTop.classList.toggle('hidden', !(available || postponed || downloaded));
@@ -232,17 +302,17 @@
     if (!dl) return;
     dl.innerHTML = '';
     const rows = [
-      ['Application version', info.version || 'unknown'],
-      ['Platform', `${info.platform || ''} ${info.arch || ''}`.trim()],
-      ['Electron / Node', `${info.electron || ''} / ${info.node || ''}`],
-      ['Engine', engine.engine || 'whisper.cpp'],
-      ['Engine version', info.engineVersion || 'unknown'],
-      ['CPU runtime', (probe && probe.cpuBinaryPath) || engine.binaryPath || 'unknown'],
-      ['GPU runtime bundled', probe ? String(Boolean(probe.gpuRuntimeBundled)) : 'not checked'],
-      ['GPU usable', probe ? String(Boolean(probe.gpuUsable)) : 'not checked'],
-      ['FFmpeg / FFprobe', `${Boolean(info.media && info.media.ffmpeg)} / ${Boolean(info.media && info.media.ffprobe)}`],
-      ['Data folder', info.dataDir || ''],
-      ['Models folder', info.modelsDir || ''],
+      [t('diag.appVersion'), info.version || 'unknown'],
+      [t('diag.platform'), `${info.platform || ''} ${info.arch || ''}`.trim()],
+      [t('diag.electronNode'), `${info.electron || ''} / ${info.node || ''}`],
+      [t('diag.engine'), engine.engine || 'whisper.cpp'],
+      [t('diag.engineVersion'), info.engineVersion || 'unknown'],
+      [t('diag.cpuRuntime'), (probe && probe.cpuBinaryPath) || engine.binaryPath || 'unknown'],
+      [t('diag.gpuBundled'), probe ? String(Boolean(probe.gpuRuntimeBundled)) : t('diag.notChecked')],
+      [t('diag.gpuUsable'), probe ? String(Boolean(probe.gpuUsable)) : t('diag.notChecked')],
+      [t('diag.ffmpeg'), `${Boolean(info.media && info.media.ffmpeg)} / ${Boolean(info.media && info.media.ffprobe)}`],
+      [t('diag.dataDir'), info.dataDir || ''],
+      [t('diag.modelsDir'), info.modelsDir || ''],
     ];
     for (const [k, v] of rows) {
       const wrap = document.createElement('div');
@@ -261,12 +331,12 @@
     const dl = $('#about-info');
     dl.innerHTML = '';
     const rows = [
-      ['Application', `${info.name || 'Forensic Transcriber'} ${info.version || ''}`.trim()],
-      ['Scope', info.scope || '56.12'],
-      ['Platform', `${info.platform || ''} ${info.arch || ''}`.trim()],
-      ['Electron / Node', `${info.electron || ''} / ${info.node || ''}`],
-      ['Data folder', info.dataDir || ''],
-      ['Models folder', info.modelsDir || ''],
+      [t('diag.application'), `${info.name || 'Forensic Transcriber'} ${info.version || ''}`.trim()],
+      [t('diag.scope'), info.scope || '56.12'],
+      [t('diag.platform'), `${info.platform || ''} ${info.arch || ''}`.trim()],
+      [t('diag.electronNode'), `${info.electron || ''} / ${info.node || ''}`],
+      [t('diag.dataDir'), info.dataDir || ''],
+      [t('diag.modelsDir'), info.modelsDir || ''],
     ];
     for (const [k, v] of rows) {
       const wrap = document.createElement('div');
@@ -282,10 +352,10 @@
   function updateModelBadge() {
     const badge = $('#model-badge');
     if (state.appInfo && state.appInfo.modelReady) {
-      badge.textContent = 'Model ready';
+      badge.textContent = t('badge.modelReady');
       badge.className = 'badge badge-ok';
     } else {
-      badge.textContent = 'Model not installed';
+      badge.textContent = t('badge.modelMissing');
       badge.className = 'badge badge-warn';
     }
   }
@@ -302,31 +372,64 @@
     if (!el && !diag) return;
     const parts = [];
     if (!probe) {
-      parts.push('Engine capability not checked yet.');
+      parts.push(t('runtime.engineNotChecked'));
     } else {
       const cpu = probe.cpuBinary || {};
       if (!cpu.ok) {
-        parts.push('Engine check unavailable. Install a model, then check again.');
+        parts.push(t('runtime.engineUnavailable'));
       } else if (!probe.gpuRuntimeBundled) {
-        parts.push('Engine: CPU runtime only (no GPU runtime bundled).');
+        parts.push(t('runtime.cpuOnly'));
       } else {
         const gpu = probe.gpuBinary || {};
         if (gpu.cudaCapable && gpu.gpuDeviceFound) {
-          parts.push(`Engine: CUDA runtime bundled, GPU detected (${gpu.gpuName || 'GPU'}).`);
+          parts.push(t('runtime.cudaDetected', { name: gpu.gpuName || 'GPU' }));
         } else if (gpu.cudaCapable) {
-          parts.push('Engine: CUDA runtime bundled, but no GPU detected on this machine.');
+          parts.push(t('runtime.cudaNoDevice'));
         } else {
-          parts.push('Engine: GPU runtime bundled but not CUDA-capable.');
+          parts.push(t('runtime.gpuNotCuda'));
         }
       }
     }
     if (lastRun) {
-      parts.push(lastRun.mode === 'gpu' ? 'Last run: GPU.' : `Last run: CPU (${lastRun.reason || 'fallback'}).`);
+      parts.push(lastRun.mode === 'gpu' ? t('runtime.lastGpu') : t('runtime.lastCpu', { reason: lastRun.reason || 'fallback' }));
     }
     const text = parts.join(' ');
     const cls = `engine-status small ${probe && probe.gpuUsable ? 'ok' : 'muted'}`;
     if (el) { el.textContent = text; el.className = cls; }
     if (diag) { diag.textContent = text; diag.className = cls; }
+    renderRuntimePanel();
+  }
+
+  /**
+   * Distinguish three separate facts that must never be conflated: whether a GPU
+   * runtime is *available*, which runtime was *selected* for the last run, and
+   * which one was *actually used*. The presence of an NVIDIA device is never
+   * treated as GPU support on its own.
+   */
+  function renderRuntimePanel() {
+    const wrap = $('#runtime-panel');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const probe = state.engineProbe;
+    const gpuAvailable = Boolean(probe && probe.gpuRuntimeBundled && probe.gpuBinary && probe.gpuBinary.cudaCapable && probe.gpuBinary.gpuDeviceFound);
+    const used = state.lastRunMode ? (state.lastRunMode.mode === 'gpu' ? t('runtime.gpu') : t('runtime.cpu')) : t('runtime.notRun');
+    const rows = [
+      [t('runtime.available'), gpuAvailable ? t('runtime.gpu') : t('runtime.cpu'), gpuAvailable ? 'ok' : ''],
+      [t('runtime.selected'), $('#chk-gpu') && $('#chk-gpu').checked && gpuAvailable ? t('runtime.gpu') : t('runtime.cpu'), ''],
+      [t('runtime.used'), used, state.lastRunMode && state.lastRunMode.mode === 'gpu' ? 'ok' : ''],
+    ];
+    for (const [label, value, cls] of rows) {
+      const chip = document.createElement('span');
+      chip.className = `runtime-chip${cls ? ` ${cls}` : ''}`;
+      const l = document.createElement('span');
+      l.className = 'runtime-chip-label';
+      l.textContent = label;
+      const v = document.createElement('span');
+      v.className = 'runtime-chip-value';
+      v.textContent = value;
+      chip.append(l, v);
+      wrap.appendChild(chip);
+    }
   }
 
   async function checkEngine(force = false) {
@@ -337,7 +440,7 @@
       return probe;
     } catch (err) {
       renderEngineStatus(null, null);
-      toast(`Engine check failed: ${errText(err)}`, 'error');
+      toast(`${t('error.engineCheck')}: ${errText(err)}`, 'error');
       return null;
     }
   }
@@ -387,9 +490,9 @@
       row.className = 'model-row';
       const status = m.installed
         ? m.verified
-          ? '<span class="badge badge-ok">verified</span>'
-          : '<span class="badge badge-warn">checksum mismatch</span>'
-        : '<span class="badge badge-warn">not installed</span>';
+          ? `<span class="badge badge-ok">${t('models.verified')}</span>`
+          : `<span class="badge badge-warn">${t('models.checksumMismatch')}</span>`
+        : `<span class="badge badge-warn">${t('models.notInstalled')}</span>`;
       row.innerHTML = `
         <div class="top"><span class="name"></span><span>${status}</span></div>
         <p class="desc"></p>
@@ -402,13 +505,13 @@
       if (m.kind === 'asr' || m.kind === 'vad') {
         const dl = document.createElement('button');
         dl.className = 'btn btn-small';
-        dl.textContent = m.installed ? 'Reinstall' : 'Install';
+        dl.textContent = m.installed ? t('models.reinstall') : t('models.install');
         dl.addEventListener('click', () => installModel(m.id, dl));
         actions.appendChild(dl);
 
         const imp = document.createElement('button');
         imp.className = 'btn btn-small';
-        imp.textContent = 'Import file…';
+        imp.textContent = t('models.importFile');
         imp.addEventListener('click', () => importModelFile(m.id));
         actions.appendChild(imp);
       }
@@ -417,15 +520,24 @@
   }
 
   async function installModel(modelId, button) {
+    const label = button.textContent;
     button.disabled = true;
-    button.textContent = 'Downloading…';
+    button.textContent = t('models.downloading');
+    resetModelProgress();
     try {
       await call(api.models.install(modelId));
-      toast('Model installed and verified.', 'success');
+      const result = $('#model-progress-result');
+      if (result) result.textContent = `✓ ${t('models.installedOk')} ✓ SHA-256 ✓ ${t('models.verified')}`;
+      toast(t('models.installedOk'), 'success');
     } catch (err) {
-      toast(`Model install failed: ${errText(err)}`, 'error');
+      const wrap = $('#model-progress');
+      if (wrap) wrap.classList.remove('hidden');
+      const result = $('#model-progress-result');
+      if (result) result.textContent = `${t('error.modelInstallFailed')}: ${errText(err)}`;
+      toast(`${t('error.modelInstallFailed')}: ${errText(err)}`, 'error');
     } finally {
       button.disabled = false;
+      button.textContent = label;
       await refreshModels();
     }
   }
@@ -434,9 +546,9 @@
     try {
       const res = await call(api.models.importFile(modelId));
       if (res && res.canceled) return;
-      toast('Model file imported and verified.', 'success');
+      toast(t('msg.modelImported'), 'success');
     } catch (err) {
-      toast(`Model import failed: ${errText(err)}`, 'error');
+      toast(`${t('error.modelImport')}: ${errText(err)}`, 'error');
     } finally {
       await refreshModels();
     }
@@ -447,11 +559,12 @@
     try {
       state.cases = await call(api.cases.list());
     } catch (err) {
-      toast(`Could not list cases: ${errText(err)}`, 'error');
+      toast(`${t('error.listCases')}: ${errText(err)}`, 'error');
       return;
     }
     renderCaseList();
     updateStorageInfo();
+    if (state.caseRecord) await refreshDashboard();
   }
 
   /**
@@ -464,7 +577,7 @@
     if (!el) return;
     const caseCount = state.cases.length;
     const fileCount = state.cases.reduce((n, c) => n + (Number(c.evidence_count) || 0), 0);
-    el.textContent = `${caseCount} case${caseCount === 1 ? '' : 's'} · ${fileCount} file${fileCount === 1 ? '' : 's'}`;
+    el.textContent = `${caseCount} ${t('nav.casesCount')} · ${fileCount} ${t('nav.filesSuffix')}`;
   }
 
   function renderCaseList() {
@@ -474,28 +587,45 @@
       const li = document.createElement('li');
       li.className = 'muted small';
       li.style.padding = '10px';
-      li.textContent = 'No cases yet.';
+      li.textContent = t('nav.noCases');
       ul.appendChild(li);
       return;
     }
     for (const c of state.cases) {
       const li = document.createElement('li');
-      li.className = `case-item${state.caseRecord && state.caseRecord.case_id === c.case_id ? ' active' : ''}`;
+      const active = state.caseRecord && state.caseRecord.case_id === c.case_id;
+      li.className = `case-item${active ? ' active' : ''}`;
       const title = document.createElement('div');
       title.className = 'title';
       title.textContent = c.title;
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `${c.evidence_count} file(s) · ${relativeTime(c.updated_at)}`;
-      li.append(title, meta);
+      const line = [
+        c.file_number || null,
+        c.authority || null,
+        `${c.evidence_count} ${t('nav.filesSuffix')}`,
+      ].filter(Boolean).join(' · ');
+      meta.textContent = line;
+      const sub = document.createElement('div');
+      sub.className = 'meta sub';
+      sub.textContent = `${t('dash.lastActivity')}: ${relativeTime(c.updated_at)}${c.due_date ? ` · ${t('dash.deadline')}: ${c.due_date}` : ''}`;
+      li.append(title, meta, sub);
       li.addEventListener('click', () => openCase(c.case_id));
       ul.appendChild(li);
     }
   }
 
+  function caseSubtitle(c) {
+    const parts = [c.case_id];
+    if (c.file_number) parts.push(c.file_number);
+    if (c.authority) parts.push(c.authority);
+    if (c.due_date) parts.push(`${t('dash.deadline')}: ${c.due_date}`);
+    return parts.join(' · ');
+  }
+
   async function openCase(caseId) {
     if (state.store && state.store.dirty) {
-      const ok = await confirmDialog('Discard unsaved edits?', 'This case has unsaved transcript edits.');
+      const ok = await confirmDialog(t('unsaved.discardTitle'), t('unsaved.discardBody'));
       if (!ok) return;
     }
     stopPlayback();
@@ -506,18 +636,312 @@
       state.activeEvidenceId = null;
       state.transcriptMeta = null;
       state.store = null;
+      state.searchQuery = '';
       $('#empty-state').classList.add('hidden');
       $('#case-view').classList.remove('hidden');
       $('#case-title').textContent = state.caseRecord.title;
-      $('#case-subtitle').textContent = `${state.caseRecord.case_id} · ${state.caseRecord.notes || 'no notes'}`;
+      $('#case-subtitle').textContent = caseSubtitle(state.caseRecord);
       renderEvidenceList();
       showReview(null);
       renderCaseList();
       $('#btn-save').disabled = true;
       $('#btn-export').disabled = true;
       reportIntegrity(data.integrity, data.databaseHealth);
+      await refreshDashboard();
     } catch (err) {
-      toast(`Could not open case: ${errText(err)}`, 'error');
+      toast(`${t('case.openFailed')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // --------------------------------------------------------------- dashboard
+  async function refreshDashboard() {
+    if (!state.caseRecord) return;
+    try {
+      state.dashboard = await call(api.cases.dashboard(state.caseRecord.case_id));
+    } catch (err) {
+      state.dashboard = null;
+    }
+    renderDashboard();
+  }
+
+  function renderDashboard() {
+    const grid = $('#dash-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const d = state.dashboard;
+    $('#dash-updated').textContent = d ? `${t('dash.lastActivity')}: ${relativeTime(d.updated_at)}` : '';
+    if (!d) return;
+    const integrityOk = !(d.failed_runs > 0);
+    const rows = [
+      ['evidence', t('dash.evidence'), d.evidence, ''],
+      ['transcribed', t('dash.transcribed'), `${d.transcribed}/${d.evidence}`, d.transcribed === d.evidence && d.evidence > 0 ? 'ok' : ''],
+      ['reviewed', t('dash.reviewed'), d.reviewed, ''],
+      ['verified', t('dash.verified'), d.verified, d.verified > 0 ? 'ok' : ''],
+      ['unclear', t('dash.unclear'), d.unclear_segments, d.unclear_segments > 0 ? 'warn' : ''],
+      ['report', t('dash.report'), d.has_report ? '✓' : '—', d.has_report ? 'ok' : 'warn'],
+      ['delivery', t('dash.delivery'), d.deliveries > 0 ? d.deliveries : '—', d.deliveries > 0 ? 'ok' : ''],
+      ['deadline', t('dash.deadline'), d.due_date || t('dash.noDeadline'), deadlineClass(d.due_date)],
+      ['integrity', t('dash.integrity'), integrityOk ? t('dash.integrityOk') : `${d.failed_runs}`, integrityOk ? 'ok' : 'warn'],
+      ['notes', t('dash.notes'), d.notes, ''],
+      ['revisions', t('dash.revisions'), d.revisions, ''],
+      ['missingFields', t('dash.missingFields'), d.missing_assignment_fields, d.missing_assignment_fields > 0 ? 'warn' : 'ok'],
+    ];
+    for (const [metric, label, value, cls] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      if (cls) dd.className = cls;
+      if (metric) dd.dataset.metric = metric;
+      dd.textContent = String(value);
+      wrap.append(dt, dd);
+      grid.appendChild(wrap);
+    }
+    renderWorkflow();
+  }
+
+  function deadlineClass(dueDate) {
+    if (!dueDate) return 'warn';
+    const due = new Date(`${dueDate}T23:59:59`);
+    if (Number.isNaN(due.getTime())) return '';
+    const days = (due.getTime() - Date.now()) / 86400000;
+    if (days < 0) return 'bad';
+    if (days <= 3) return 'warn';
+    return 'ok';
+  }
+
+  /**
+   * The eight-step expert workflow (Görevlendirme → Teslim). Step status is
+   * derived from the live dashboard counts so it always matches the case, and
+   * the first step that still has work is marked as the current step.
+   */
+  function renderWorkflow() {
+    const ol = $('#workflow-list');
+    if (!ol) return;
+    ol.innerHTML = '';
+    const d = state.dashboard;
+    const steps = [
+      { n: '01', label: t('workflow.01'), status: !d ? 'pending' : d.missing_assignment_fields === 0 ? 'done' : 'current' },
+      { n: '02', label: t('workflow.02'), status: !d || d.evidence === 0 ? 'current' : 'done' },
+      { n: '03', label: t('workflow.03'), status: !d || d.evidence === 0 ? 'pending' : d.transcribed === d.evidence ? 'done' : 'current' },
+      { n: '04', label: t('workflow.04'), status: !d || d.transcribed === 0 ? 'pending' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
+      { n: '05', label: t('workflow.05'), status: !d || d.transcribed === 0 ? 'pending' : d.unclear_segments > 0 ? 'warn' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
+      { n: '06', label: t('workflow.06'), status: !d ? 'pending' : d.has_report ? 'done' : d.transcribed > 0 ? 'current' : 'pending' },
+      { n: '07', label: t('workflow.07'), status: !d ? 'pending' : d.failed_runs > 0 ? 'warn' : d.has_report ? 'current' : 'pending' },
+      { n: '08', label: t('workflow.08'), status: !d ? 'pending' : d.deliveries > 0 ? 'done' : d.has_report ? 'current' : 'pending' },
+    ];
+    for (const step of steps) {
+      const li = document.createElement('li');
+      li.className = `wf-step ${step.status}`;
+      const num = document.createElement('span');
+      num.className = 'wf-num';
+      num.textContent = step.n;
+      const label = document.createElement('span');
+      label.className = 'wf-label';
+      label.textContent = step.label;
+      const badge = document.createElement('span');
+      badge.className = 'wf-badge';
+      badge.textContent = t(`workflow.${step.status === 'current' ? 'current' : step.status === 'warn' ? 'warn' : step.status === 'done' ? 'done' : 'pending'}`);
+      li.append(num, label, badge);
+      ol.appendChild(li);
+    }
+  }
+
+  // ------------------------------------------------------------- case intake
+  function openCaseEdit() {
+    if (!state.caseRecord) return;
+    const c = state.caseRecord;
+    $('#edit-case-title').value = c.title || '';
+    $('#edit-case-file-number').value = c.file_number || '';
+    $('#edit-case-authority').value = c.authority || '';
+    $('#edit-case-type').value = c.case_type || '';
+    $('#edit-case-assignment-date').value = c.assignment_date || '';
+    $('#edit-case-due').value = c.due_date || '';
+    $('#edit-case-scope').value = c.scope || '';
+    $('#edit-case-description').value = c.assignment_description || '';
+    $('#edit-case-questions').value = c.requested_questions || '';
+    $('#dialog-case-edit').showModal();
+  }
+
+  async function saveCaseEdit() {
+    if (!state.caseRecord) return;
+    const patch = {
+      title: $('#edit-case-title').value.trim() || state.caseRecord.title,
+      file_number: $('#edit-case-file-number').value.trim(),
+      authority: $('#edit-case-authority').value.trim(),
+      case_type: $('#edit-case-type').value.trim(),
+      assignment_date: $('#edit-case-assignment-date').value || null,
+      due_date: $('#edit-case-due').value || null,
+      scope: $('#edit-case-scope').value.trim(),
+      assignment_description: $('#edit-case-description').value.trim(),
+      requested_questions: $('#edit-case-questions').value.trim(),
+    };
+    try {
+      state.caseRecord = await call(api.cases.update(state.caseRecord.case_id, patch));
+      $('#case-title').textContent = state.caseRecord.title;
+      $('#case-subtitle').textContent = `${state.caseRecord.case_id} · ${state.caseRecord.notes || 'no notes'}`;
+      await refreshCases();
+      await refreshDashboard();
+      toast(t('msg.caseSaved'), 'success');
+    } catch (err) {
+      toast(`${t('error.saveCase')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- notes
+  async function openNotes() {
+    if (!state.caseRecord) return;
+    try {
+      state.notes = await call(api.notes.list(state.caseRecord.case_id));
+    } catch (err) {
+      state.notes = [];
+    }
+    renderNotes();
+    $('#note-body').value = '';
+    $('#note-category').value = '';
+    $('#dialog-notes').showModal();
+  }
+
+  function renderNotes() {
+    const ul = $('#notes-list');
+    ul.innerHTML = '';
+    if (!state.notes.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('note.empty');
+      ul.appendChild(li);
+      return;
+    }
+    for (const n of state.notes) {
+      const li = document.createElement('li');
+      li.className = 'note-row';
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = n.body;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const stamp = document.createElement('span');
+      const where = n.at_seconds != null ? ` · ${formatClock(n.at_seconds)}` : '';
+      stamp.textContent = `${n.kind === 'BOOKMARK' ? `${t('note.bookmark')} · ` : ''}${new Date(n.created_at).toLocaleString()}${where}`;
+      meta.appendChild(stamp);
+      if (n.category) {
+        const cat = document.createElement('span');
+        cat.className = 'cat';
+        cat.textContent = n.category;
+        meta.appendChild(cat);
+      }
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      meta.appendChild(spacer);
+      const del = actionButton(t('note.delete'), async () => {
+        try {
+          await call(api.notes.remove(n.note_id));
+          state.notes = state.notes.filter((x) => x.note_id !== n.note_id);
+          renderNotes();
+          await refreshDashboard();
+        } catch (err) {
+          toast(`${t('error.deleteNote')}: ${errText(err)}`, 'error');
+        }
+      });
+      meta.appendChild(del);
+      li.append(body, meta);
+      ul.appendChild(li);
+    }
+  }
+
+  async function addNote() {
+    if (!state.caseRecord) return;
+    const body = $('#note-body').value.trim();
+    if (!body) {
+      toast(t('error.writeFirst'), 'error');
+      return;
+    }
+    try {
+      const note = await call(api.notes.create(state.caseRecord.case_id, {
+        body,
+        category: $('#note-category').value.trim() || null,
+        evidenceId: state.activeEvidenceId || null,
+        atSeconds: audio ? audio.currentTime : null,
+      }));
+      state.notes.push(note);
+      renderNotes();
+      $('#note-body').value = '';
+      $('#note-category').value = '';
+      await refreshDashboard();
+    } catch (err) {
+      toast(`${t('error.addNote')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- report
+  async function openReport() {
+    if (!state.caseRecord) return;
+    $('#dialog-report').showModal();
+    await refreshChecklist();
+  }
+
+  async function refreshChecklist() {
+    const ul = $('#report-checklist');
+    ul.innerHTML = '';
+    try {
+      const checklist = await call(api.report.checklist(state.caseRecord.case_id));
+      for (const item of checklist.items) {
+        const li = document.createElement('li');
+        const stateEl = document.createElement('span');
+        const cls = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        stateEl.className = `state ${cls}`;
+        stateEl.textContent = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        const detail = document.createElement('span');
+        detail.className = 'detail';
+        detail.textContent = item.detail || '';
+        li.append(stateEl, label, detail);
+        ul.appendChild(li);
+      }
+    } catch (err) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = `Checklist unavailable: ${errText(err)}`;
+      ul.appendChild(li);
+    }
+  }
+
+  async function exportReport() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.report.export(state.caseRecord.case_id, {}));
+      toast(t('msg.reportWritten', { n: res.files.length }), 'success');
+      const open = await confirmDialog(t('confirm.openExportsTitle'), t('confirm.openExportsBody'));
+      if (open) await call(api.exports.reveal(state.caseRecord.case_id));
+    } catch (err) {
+      toast(`${t('error.reportExport')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- delivery
+  async function runDelivery() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.delivery.build(state.caseRecord.case_id, {
+        includeEvidence: $('#chk-delivery-evidence').checked,
+      }));
+      if (res && res.canceled) return;
+      toast(t('msg.deliveryWritten', { size: formatBytes(res.bytes) }), 'success');
+      await refreshDashboard();
+    } catch (err) {
+      toast(`${t('error.delivery')}: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- support
+  async function runSupportBundle() {
+    try {
+      const res = await call(api.diagnostics.bundle({}));
+      if (res && res.canceled) return;
+      toast(t('msg.supportWritten', { size: formatBytes(res.bytes) }), 'success');
+    } catch (err) {
+      toast(`${t('error.support')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -527,7 +951,7 @@
    */
   function reportIntegrity(integrity, databaseHealth) {
     if (databaseHealth && databaseHealth.ok === false) {
-      toast('The local database reported an integrity problem. Back up this case before continuing.', 'error');
+      toast(t('msg.dbIntegrity'), 'error');
     }
     if (!Array.isArray(integrity)) return;
     const bad = integrity.filter((i) => i.status !== 'OK');
@@ -538,7 +962,7 @@
         return `${ev ? ev.original_name : b.evidence_id} (${b.status})`;
       })
       .join(', ');
-    toast(`Evidence integrity warning: ${names}. Re-import the original if needed.`, 'error');
+    toast(t('msg.integrityWarning', { names }), 'error');
   }
 
   async function backUpCase() {
@@ -546,9 +970,9 @@
     try {
       const res = await call(api.cases.archiveExport(state.caseRecord.case_id));
       if (res && res.canceled) return;
-      toast(`Case backed up (${res.bytes} bytes). ${res.sha256.slice(0, 16)}…`, 'success');
+      toast(t('msg.backupDone', { bytes: res.bytes, sha: res.sha256.slice(0, 16) }), 'success');
     } catch (err) {
-      toast(`Backup failed: ${errText(err)}`, 'error');
+      toast(`${t('error.backup')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -557,10 +981,10 @@
       const res = await call(api.cases.archiveImport());
       if (res && res.canceled) return;
       await refreshCases();
-      toast('Case restored as a new case.', 'success');
+      toast(t('msg.caseRestored'), 'success');
       await openCase(res.caseId);
     } catch (err) {
-      toast(`Restore failed: ${errText(err)}`, 'error');
+      toast(`${t('error.restore')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -572,7 +996,7 @@
       const li = document.createElement('li');
       li.className = 'muted small';
       li.style.padding = '10px';
-      li.textContent = 'No recordings imported.';
+      li.textContent = t('evidence.none');
       ul.appendChild(li);
       return;
     }
@@ -584,7 +1008,7 @@
       name.textContent = ev.original_name;
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `${formatBytes(ev.size_bytes)} · ${ev.duration_seconds ? formatDuration(ev.duration_seconds) : 'unknown length'}`;
+      meta.textContent = `${formatBytes(ev.size_bytes)} · ${ev.duration_seconds ? formatDuration(ev.duration_seconds) : t('evidence.unknownLength')}`;
       li.append(name, meta);
       li.addEventListener('click', () => selectEvidence(ev.evidence_id));
       ul.appendChild(li);
@@ -593,23 +1017,90 @@
 
   async function importPaths(paths) {
     if (!state.caseRecord) {
-      toast('Create or open a case first.', 'error');
+      toast(t('import.needCase'), 'error');
       return;
     }
     if (!paths || !paths.length) return;
+    // Show the import queue with per-file status from the real import events.
+    state.importQueue = paths.map((p) => ({ path: p, name: baseName(p), stage: 'queued', error: null }));
+    state.importActive = true;
+    renderImportQueue();
+    $('#dialog-import-progress').showModal();
+    await runImport(paths);
+  }
+
+  function baseName(p) {
+    return String(p).split(/[\\/]/).pop();
+  }
+
+  function renderImportQueue() {
+    const ul = $('#import-queue');
+    if (!ul) return;
+    ul.innerHTML = '';
+    let done = 0;
+    for (const item of state.importQueue) {
+      const li = document.createElement('li');
+      li.className = `import-row ${item.stage}`;
+      const name = document.createElement('span');
+      name.className = 'import-name';
+      name.textContent = item.name;
+      const status = document.createElement('span');
+      status.className = `import-status ${item.stage}`;
+      status.textContent = t(`progress.${item.stage === 'queued' ? 'queued' : item.stage}`);
+      li.append(name, status);
+      if (item.error) {
+        const detail = document.createElement('span');
+        detail.className = 'import-error small';
+        detail.textContent = item.error.message || '';
+        li.appendChild(detail);
+      }
+      ul.appendChild(li);
+      if (item.stage === 'complete' || item.stage === 'failed') done += 1;
+    }
+    const total = state.importQueue.length;
+    $('#import-overall').textContent = `${done} / ${total}`;
+    $('#import-overall-bar').style.width = total ? `${Math.round((done / total) * 100)}%` : '0%';
+    const failed = state.importQueue.filter((i) => i.stage === 'failed');
+    $('#btn-import-retry').classList.toggle('hidden', failed.length === 0 || state.importActive);
+    $('#btn-import-cancel').classList.toggle('hidden', !state.importActive);
+  }
+
+  function handleImportProgress(p) {
+    if (!p || p.kind !== 'import') return;
+    const item = state.importQueue[p.index];
+    if (!item) return;
+    item.stage = p.stage;
+    if (p.error) item.error = p.error;
+    renderImportQueue();
+  }
+
+  async function runImport(paths) {
     try {
       const res = await call(api.evidence.importFiles(state.caseRecord.case_id, paths));
       state.evidence = await call(api.evidence.list(state.caseRecord.case_id));
       renderEvidenceList();
-      if (res.imported.length) toast(`Imported ${res.imported.length} file(s).`, 'success');
+      if (res.imported.length) toast(t('import.done', { n: res.imported.length }), 'success');
       if (res.failures.length) {
-        toast(`${res.failures.length} file(s) could not be imported: ${res.failures[0].error.message}`, 'error');
+        toast(`${res.failures.length} ${t('progress.failed')}: ${res.failures[0].error.message}`, 'error');
       }
       const first = res.imported[0];
       if (first) selectEvidence(first.evidence_id);
     } catch (err) {
-      toast(`Import failed: ${errText(err)}`, 'error');
+      toast(`${t('error.importFailed')}: ${errText(err)}`, 'error');
+    } finally {
+      state.importActive = false;
+      renderImportQueue();
+      await refreshDashboard();
     }
+  }
+
+  async function retryFailedImports() {
+    const failed = state.importQueue.filter((i) => i.stage === 'failed');
+    if (!failed.length) return;
+    state.importQueue = failed.map((i) => ({ ...i, stage: 'queued', error: null }));
+    state.importActive = true;
+    renderImportQueue();
+    await runImport(failed.map((i) => i.path));
   }
 
   // --------------------------------------------------------------- evidence view
@@ -649,17 +1140,19 @@
     $('#ev-name').textContent = ev.original_name;
     const grid = $('#ev-meta');
     grid.innerHTML = '';
+    const streamCount = ev.audio_stream_count != null ? Number(ev.audio_stream_count) : null;
     const rows = [
-      ['File name', ev.original_name],
-      ['Size', formatBytes(ev.size_bytes)],
-      ['Container', ev.format || 'unknown'],
-      ['Codec', ev.codec || 'unknown'],
-      ['Duration', ev.duration_seconds != null ? formatClock(ev.duration_seconds) : 'unknown'],
-      ['Sample rate', ev.sample_rate ? `${ev.sample_rate} Hz` : 'unknown'],
-      ['Channels', ev.channels != null ? String(ev.channels) : 'unknown'],
-      ['Bit depth', ev.bit_depth ? `${ev.bit_depth} bit` : 'n/a'],
-      ['SHA-256', ev.sha256],
-      ['Imported', new Date(ev.imported_at).toLocaleString()],
+      [t('evidence.fileName'), ev.original_name],
+      [t('evidence.size'), formatBytes(ev.size_bytes)],
+      [t('evidence.container'), ev.format || 'unknown'],
+      [t('evidence.codec'), ev.codec || 'unknown'],
+      [t('evidence.duration'), ev.duration_seconds != null ? formatClock(ev.duration_seconds) : 'unknown'],
+      [t('evidence.sampleRate'), ev.sample_rate ? `${ev.sample_rate} Hz` : 'unknown'],
+      [t('evidence.channels'), ev.channels != null ? String(ev.channels) : 'unknown'],
+      [t('evidence.bitDepth'), ev.bit_depth ? `${ev.bit_depth} bit` : 'n/a'],
+      [t('evidence.streams'), streamCount != null ? String(streamCount) : 'unknown'],
+      [t('evidence.sha'), ev.sha256],
+      [t('evidence.imported'), new Date(ev.imported_at).toLocaleString()],
     ];
     for (const [k, v] of rows) {
       const wrap = document.createElement('div');
@@ -670,6 +1163,14 @@
       wrap.append(dt, dd);
       grid.appendChild(wrap);
     }
+    // A container with more than one audio stream decodes stream order 0; say
+    // so explicitly rather than transcribing a multi-track file silently.
+    if (streamCount != null && streamCount > 1) {
+      const warn = document.createElement('p');
+      warn.className = 'multi-stream-warn small';
+      warn.textContent = t('evidence.multiStream', { n: streamCount });
+      grid.appendChild(warn);
+    }
   }
 
   // ------------------------------------------------------------------ transcript
@@ -678,7 +1179,7 @@
     try {
       data = await call(api.transcript.get(state.caseRecord.case_id, evidenceId));
     } catch (err) {
-      toast(`Could not load transcript: ${errText(err)}`, 'error');
+      toast(`${t('error.loadTranscript')}: ${errText(err)}`, 'error');
     }
     if (data) {
       state.transcriptMeta = data.transcript;
@@ -698,17 +1199,23 @@
     list.innerHTML = '';
     const segs = state.store ? state.store.segments : [];
     const stats = $('#transcript-stats');
+    const visible = filterSegments(segs, state.filter, { placeholder: FT_CONSTANTS.UNCLEAR_PLACEHOLDER });
     if (!segs.length) {
       const p = document.createElement('p');
       p.className = 'muted small';
-      p.textContent = state.transcriptMeta
-        ? 'Transcript is empty.'
-        : 'No transcript yet. Choose a model and press Transcribe.';
+      p.textContent = state.transcriptMeta ? t('transcript.emptyAfter') : t('transcript.empty');
       list.appendChild(p);
     } else {
-      for (const seg of segs) list.appendChild(renderSegment(seg));
+      for (const seg of visible) list.appendChild(renderSegment(seg));
       const edited = segs.filter((s) => s.status !== SEGMENT_STATUS.AUTOMATIC).length;
-      stats.textContent = `${segs.length} segments · ${edited} human-reviewed`;
+      stats.textContent = `${segs.length} ${t('transcript.segments')} · ${edited} ${t('transcript.humanReviewed')}`;
+    }
+    const note = $('#filter-note');
+    if (state.filter !== FILTERS.ALL) {
+      note.classList.remove('hidden');
+      note.textContent = `${t('transcript.showing')} ${visible.length}/${segs.length}`;
+    } else {
+      note.classList.add('hidden');
     }
     $('#btn-undo').disabled = !state.store || !state.store.canUndo;
     $('#btn-redo').disabled = !state.store || !state.store.canRedo;
@@ -717,8 +1224,9 @@
   }
 
   function renderSegment(seg) {
+    const flagged = Array.isArray(seg.flags) && seg.flags.length > 0;
     const el = document.createElement('div');
-    el.className = `seg ${seg.status.toLowerCase()}${state.activeSegmentId === seg.segment_id ? ' active' : ''}`;
+    el.className = `seg ${seg.status.toLowerCase()}${flagged ? ' flagged' : ''}${state.activeSegmentId === seg.segment_id ? ' active' : ''}`;
     el.dataset.id = seg.segment_id;
 
     const head = document.createElement('div');
@@ -727,7 +1235,7 @@
     const startBtn = document.createElement('button');
     startBtn.className = 'ts';
     startBtn.textContent = formatClock(seg.start);
-    startBtn.title = 'Play from here';
+    startBtn.title = t('player.playFromHere');
     startBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       playSegment(seg);
@@ -750,23 +1258,46 @@
 
     head.append(startBtn, sep, endSpan, speaker, status);
 
+    if (flagged) {
+      const flags = document.createElement('span');
+      flags.className = 'flags';
+      for (const f of seg.flags) {
+        const tag = document.createElement('span');
+        tag.className = 'flag';
+        tag.textContent = f;
+        flags.appendChild(tag);
+      }
+      head.appendChild(flags);
+    }
+
     if (seg.confidence != null) {
       const conf = document.createElement('span');
       conf.className = 'conf';
-      conf.textContent = `conf ${seg.confidence.toFixed(2)}`;
-      conf.title = 'Mean token probability from the ASR engine';
+      conf.textContent = `${t('seg.confidence')} ${seg.confidence.toFixed(2)}`;
+      conf.title = t('seg.confidenceTip');
       head.appendChild(conf);
     }
 
     el.appendChild(head);
 
     if (state.editingSegmentId === seg.segment_id) {
+      // Explicit editing surface: nothing here relies on the operator guessing
+      // that Ctrl+Enter saves. The Save/Cancel buttons are the primary path and
+      // the keyboard equivalents are helpers.
+      el.classList.add('editing');
       const ta = document.createElement('textarea');
       ta.className = 'seg-edit';
       ta.value = seg.text;
+      let cancelled = false;
       const save = () => {
         state.editingSegmentId = null;
         state.store.editText(seg.segment_id, ta.value);
+        toast(`${t('seg.save')} ✓`, 'success');
+      };
+      const cancel = () => {
+        cancelled = true;
+        state.editingSegmentId = null;
+        renderTranscript();
       };
       ta.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -774,53 +1305,107 @@
           save();
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          state.editingSegmentId = null;
-          renderTranscript();
+          cancel();
         }
       });
       el.appendChild(ta);
-      setTimeout(() => {
-        ta.focus();
-        ta.selectionStart = ta.value.length;
-      }, 0);
+      const editActions = document.createElement('div');
+      editActions.className = 'seg-edit-actions';
+      const hint = document.createElement('span');
+      hint.className = 'muted small';
+      hint.textContent = t('seg.editHint');
+      editActions.append(
+        hint,
+        actionButton(t('seg.save'), save, 'btn-primary'),
+        actionButton(t('seg.cancel'), cancel)
+      );
+      el.appendChild(editActions);
+      if (!cancelled) {
+        setTimeout(() => {
+          ta.focus();
+          ta.selectionStart = ta.value.length;
+        }, 0);
+      }
     } else {
       const body = document.createElement('div');
       body.className = 'seg-body';
-      body.textContent = seg.text;
+      const query = state.searchQuery.trim();
+      if (query) {
+        for (const part of highlightParts(seg.text, query)) {
+          if (part.match) {
+            const mark = document.createElement('mark');
+            mark.textContent = part.text;
+            body.appendChild(mark);
+          } else {
+            body.appendChild(document.createTextNode(part.text));
+          }
+        }
+      } else {
+        body.textContent = seg.text;
+      }
       el.appendChild(body);
     }
 
     const actions = document.createElement('div');
     actions.className = 'seg-actions';
+    const flagButtons = FLAG_OPTIONS.map((flag) => {
+      const active = Array.isArray(seg.flags) && seg.flags.includes(flag);
+      const btn = actionButton(active ? `${flag} ✓` : flag, () => state.store.toggleFlag(seg.segment_id, flag), null, `flag-${flag}`);
+      if (active) btn.classList.add('btn-primary');
+      return btn;
+    });
+    const splitBtn = actionButton(t('seg.split'), () => splitSegment(seg), null, 'split');
+    splitBtn.title = t('seg.splitTip');
+    const mergeBtn = actionButton(t('seg.mergeNext'), () => mergeNext(seg), null, 'merge');
+    mergeBtn.title = t('seg.mergeTip');
     actions.append(
-      actionButton('Edit', () => {
+      actionButton(t('seg.edit'), () => {
         state.editingSegmentId = seg.segment_id;
         renderTranscript();
-      }),
-      actionButton('Play', () => playSegment(seg)),
-      actionButton('Split at cursor', () => splitSegment(seg)),
-      actionButton('Merge next', () => mergeNext(seg)),
-      actionButton('Mark reviewed', () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.REVIEWED)),
-      actionButton('Mark verified', () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.VERIFIED)),
-      actionButton('Speaker', () => cycleSpeaker(seg)),
-      actionButton('Delete', () => state.store.deleteSegment(seg.segment_id))
+      }, null, 'edit'),
+      actionButton(t('seg.play'), () => playSegment(seg), null, 'play'),
+      splitBtn,
+      mergeBtn,
+      actionButton(t('seg.markReviewed'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.REVIEWED), null, 'reviewed'),
+      actionButton(t('seg.markVerified'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.VERIFIED), null, 'verified'),
+      actionButton(t('seg.speaker'), () => cycleSpeaker(seg), null, 'speaker'),
+      ...flagButtons,
+      actionButton(t('seg.delete'), () => state.store.deleteSegment(seg.segment_id), null, 'delete')
     );
     el.appendChild(actions);
 
     el.addEventListener('click', () => {
+      // Select the segment and move the playhead to its start so the audio, the
+      // waveform cursor and the highlighted segment all agree. This is the core
+      // audio/text sync action.
       state.activeSegmentId = seg.segment_id;
+      if (state.duration > 0 && (audio.currentTime < seg.start || audio.currentTime > seg.end)) {
+        audio.seek(seg.start);
+      }
       renderTranscript();
       renderWaveform();
+      scrollSegmentIntoView(seg.segment_id);
     });
 
     return el;
   }
 
-  function actionButton(label, handler) {
+  /**
+   * Keep the active segment visible while moving through the transcript. Uses
+   * scrollIntoView with block:'nearest' so following the audio never yanks the
+   * whole page around.
+   */
+  function scrollSegmentIntoView(segmentId) {
+    const el = document.querySelector(`.seg[data-id="${segmentId}"]`);
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function actionButton(label, handler, extraClass, action) {
     const b = document.createElement('button');
-    b.className = 'btn';
+    b.className = `btn${extraClass ? ` ${extraClass}` : ''}`;
     b.type = 'button';
     b.textContent = label;
+    if (action) b.dataset.action = action;
     b.addEventListener('click', (e) => {
       e.stopPropagation();
       handler();
@@ -831,12 +1416,12 @@
   function splitSegment(seg) {
     const at = audio.currentTime > seg.start && audio.currentTime < seg.end ? audio.currentTime : (seg.start + seg.end) / 2;
     if (!state.store.splitSegment(seg.segment_id, at)) {
-      toast('Cannot split here: playhead must be inside the segment.', 'error');
+      toast(t('seg.split') + ': ' + t('seg.splitTip'), 'error');
     }
   }
 
   function mergeNext(seg) {
-    if (!state.store.mergeWithNext(seg.segment_id)) toast('No following segment to merge.', 'error');
+    if (!state.store.mergeWithNext(seg.segment_id)) toast(t('seg.mergeTip'), 'error');
   }
 
   function cycleSpeaker(seg) {
@@ -916,25 +1501,63 @@
   function handleProgress(payload) {
     if (!payload) return;
     if (payload.kind === 'model-download') {
-      const pct = payload.total ? Math.round((payload.received / payload.total) * 100) : 0;
-      $('#progress-wrap').classList.remove('hidden');
-      $('#progress-bar').style.width = `${pct}%`;
-      $('#progress-label').textContent = `Downloading model ${payload.modelId} — ${pct}%`;
+      renderModelProgress(payload);
       return;
     }
     if (payload.kind === 'stage') {
       $('#progress-wrap').classList.remove('hidden');
       if (typeof payload.percent === 'number') $('#progress-bar').style.width = `${payload.percent}%`;
       const labels = {
-        preparing: 'Preparing working copy…',
-        decoding: 'Decoding audio…',
-        'loading-model': 'Loading model…',
+        preparing: t('progress.preparing'),
+        decoding: t('progress.decoding'),
+        'loading-model': t('progress.loadingModel'),
         runtime: `Runtime: ${(payload.runtimeMode || 'cpu').toUpperCase()}`,
-        transcribing: 'Transcribing…',
-        done: 'Done',
+        transcribing: t('progress.transcribing'),
+        done: t('progress.done'),
       };
       $('#progress-label').textContent = labels[payload.stage] || payload.stage;
     }
+  }
+
+  /**
+   * Model install progress from the real download events. Every figure shown
+   * (percent, downloaded/total, speed, ETA) is derived from the byte counts the
+   * downloader reports — no fake timer.
+   */
+  let lastModelProgress = null;
+  function renderModelProgress(p) {
+    const wrap = $('#model-progress');
+    if (!wrap) return;
+    wrap.classList.remove('hidden');
+    const received = Number(p.received) || 0;
+    const total = Number(p.total) || 0;
+    const pct = total ? Math.round((received / total) * 100) : 0;
+    const now = Date.now();
+    let speed = null;
+    if (lastModelProgress && now > lastModelProgress.at && received >= lastModelProgress.received) {
+      speed = ((received - lastModelProgress.received) / (now - lastModelProgress.at)) * 1000;
+    }
+    lastModelProgress = { received, at: now };
+    const model = state.models.find((m) => m.id === p.modelId);
+    $('#model-progress-name').textContent = model ? model.label : String(p.modelId || '');
+    $('#model-progress-stage').textContent = t('progress.downloading');
+    $('#model-progress-bar').style.width = `${pct}%`;
+    $('#model-progress-bytes').textContent = total
+      ? `${formatBytes(received)} / ${formatBytes(total)} (${pct}%)`
+      : formatBytes(received);
+    $('#model-progress-speed').textContent = speed && speed > 0 ? `${formatBytes(speed)}/s` : '';
+    if (speed && speed > 0 && total > received) {
+      const secs = Math.round((total - received) / speed);
+      $('#model-progress-eta').textContent = `~${formatDuration(secs)} ${t('progress.remaining')}`;
+    } else {
+      $('#model-progress-eta').textContent = '';
+    }
+  }
+
+  function resetModelProgress() {
+    lastModelProgress = null;
+    const wrap = $('#model-progress');
+    if (wrap) wrap.classList.add('hidden');
   }
 
   async function startTranscription() {
@@ -942,16 +1565,16 @@
     const modelId = $('#select-model').value;
     const model = state.models.find((m) => m.id === modelId);
     if (!model || !model.installed || !model.verified) {
-      toast('Model not installed. Open Models to install a model package to begin.', 'error');
+      toast(t('badge.modelMissing') + '. ' + t('models.install'), 'error');
       return;
     }
     state.busy = true;
     $('#btn-transcribe').disabled = true;
     $('#btn-cancel').classList.remove('hidden');
-    $('#transcribe-error').classList.add('hidden');
+    hideTranscribeError();
     $('#progress-wrap').classList.remove('hidden');
     $('#progress-bar').style.width = '2%';
-    $('#progress-label').textContent = 'Preparing…';
+    $('#progress-label').textContent = t('progress.preparing');
     try {
       const res = await call(
         api.transcribe.start({
@@ -980,21 +1603,12 @@
         // The new machine transcript was stored as a separate revision so the
         // existing reviewed/edited/verified work was not overwritten. The
         // workspace still shows the human revision.
-        toast(
-          'New machine transcript saved as a separate revision. Your reviewed/verified work was preserved and is still shown.',
-          'success'
-        );
+        toast(t('transcribe.preserved'), 'success');
       } else {
-        toast(
-          `Transcription complete${mode ? ` (${mode})` : ''}. Review each segment against the audio.`,
-          'success'
-        );
+        toast(t('transcribe.complete', { mode: mode || 'CPU' }), 'success');
       }
     } catch (err) {
-      const el = $('#transcribe-error');
-      el.textContent = errText(err) + (err.detail ? `\n${err.detail}` : '');
-      el.classList.remove('hidden');
-      toast(`Transcription failed: ${errText(err)}`, 'error');
+      showTranscribeError(err);
     } finally {
       state.busy = false;
       $('#btn-transcribe').disabled = false;
@@ -1004,12 +1618,38 @@
     }
   }
 
+  /**
+   * A failure must explain what happened, why, and what to do. The technical
+   * string is available behind "Teknik ayrıntılar" rather than being the whole
+   * message.
+   */
+  function showTranscribeError(err) {
+    const box = $('#transcribe-error');
+    if (!box) return;
+    $('#transcribe-error-title').textContent = t('error.transcriptionFailed');
+    $('#transcribe-error-body').textContent = t('error.transcriptionFailedBody');
+    const codeEl = err && err.code ? ` (${err.code})` : '';
+    const detail = `${err && err.message ? err.message : String(err)}${codeEl}${err && err.detail ? `\n${err.detail}` : ''}`;
+    const detailEl = $('#transcribe-error-detail');
+    detailEl.textContent = detail;
+    detailEl.classList.add('hidden');
+    box.classList.remove('hidden');
+    toast(t('error.transcriptionFailed') + codeEl, 'error');
+  }
+
+  function hideTranscribeError() {
+    const box = $('#transcribe-error');
+    if (box) box.classList.add('hidden');
+    const detail = $('#transcribe-error-detail');
+    if (detail) detail.classList.add('hidden');
+  }
+
   async function cancelTranscription() {
     try {
       await call(api.transcribe.cancel());
-      toast('Cancelling…');
+      toast(t('msg.cancelling'));
     } catch (err) {
-      toast(`Cancel failed: ${errText(err)}`, 'error');
+      toast(`${t('error.cancelFailed')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -1017,7 +1657,7 @@
   async function saveTranscript() {
     if (!state.store || !state.caseRecord || !state.activeEvidenceId) return;
     if (!state.store.segments.length) {
-      toast('Nothing to save.', 'error');
+      toast(t('error.nothingToSave'), 'error');
       return;
     }
     try {
@@ -1033,16 +1673,16 @@
       state.transcriptMeta = res.transcript;
       state.store.markSaved();
       renderTranscript();
-      toast('Transcript saved.', 'success');
+      toast(t('msg.transcriptSaved'), 'success');
     } catch (err) {
-      toast(`Save failed: ${errText(err)}`, 'error');
+      toast(`${t('error.saveFailed')}: ${errText(err)}`, 'error');
     }
   }
 
   // --------------------------------------------------------------------- export
   function openExportDialog() {
     if (!state.transcriptMeta && !(state.store && state.store.segments.length)) {
-      toast('No transcript to export.', 'error');
+      toast(t('error.noTranscriptToExport'), 'error');
       return;
     }
     $('#dialog-export').showModal();
@@ -1051,26 +1691,26 @@
   async function runExport() {
     const formats = Array.from(document.querySelectorAll('.exp-format:checked')).map((c) => c.value);
     if (!formats.length) {
-      toast('Select at least one format.', 'error');
+      toast(t('error.selectFormat'), 'error');
       return;
     }
     if (state.store && state.store.dirty) {
-      const ok = await confirmDialog('Save before export?', 'The transcript has unsaved edits. Save them now?');
+      const ok = await confirmDialog(t('confirm.saveBeforeExportTitle'), t('confirm.saveBeforeExportBody'));
       if (ok) await saveTranscript();
     }
     try {
       const files = await call(
         api.exports.run(state.caseRecord.case_id, state.activeEvidenceId, { formats })
       );
-      toast(`Exported ${files.length} file(s) to the case exports folder.`, 'success');
+      toast(t('msg.exported', { n: files.length }), 'success');
       // Keep the export folder one click away rather than a manual search.
       const reveal = await confirmDialog(
-        'Export complete',
-        `${files.length} file(s) were written to the case exports folder. Open the folder now?`
+        t('confirm.openExportsTitle'),
+        t('confirm.openExportsBody')
       );
       if (reveal) await openExportsFolder();
     } catch (err) {
-      toast(`Export failed: ${errText(err)}`, 'error');
+      toast(`${t('error.exportFailed')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -1078,9 +1718,9 @@
     if (!state.caseRecord) return;
     try {
       const dir = await call(api.exports.reveal(state.caseRecord.case_id));
-      toast(`Exports folder: ${dir}`);
+      toast(t('msg.exportsFolder', { dir }));
     } catch (err) {
-      toast(`Could not open the exports folder: ${errText(err)}`, 'error');
+      toast(`${t('error.openExports')}: ${errText(err)}`, 'error');
     }
   }
 
@@ -1109,7 +1749,7 @@
       if (dlg.returnValue !== 'default') return;
       const title = $('#new-case-title').value.trim();
       if (!title) {
-        toast('Case title is required.', 'error');
+        toast(t('error.titleRequired'), 'error');
         return;
       }
       try {
@@ -1117,7 +1757,7 @@
         await refreshCases();
         await openCase(created.case_id);
       } catch (err) {
-        toast(`Could not create case: ${errText(err)}`, 'error');
+        toast(`${t('error.createCase')}: ${errText(err)}`, 'error');
       }
     });
 
@@ -1125,9 +1765,9 @@
     bind('#btn-open-datadir', 'click', async () => {
       try {
         const dir = await call(api.evidence.revealDataDir());
-        toast(`Opened the data folder: ${dir}`);
+        toast(t('msg.dataDirOpened', { dir }));
       } catch (err) {
-        toast(`Could not open the data folder: ${errText(err)}`, 'error');
+        toast(`${t('error.openDataDir')}: ${errText(err)}`, 'error');
       }
     });
 
@@ -1136,7 +1776,7 @@
         const paths = await call(api.dialog.openFiles());
         await importPaths(paths);
       } catch (err) {
-        toast(`Could not open file picker: ${errText(err)}`, 'error');
+        toast(`${t('error.filePicker')}: ${errText(err)}`, 'error');
       }
     });
 
@@ -1155,7 +1795,7 @@
       const files = Array.from(e.dataTransfer.files || []);
       const paths = files.map((f) => f.path).filter(Boolean);
       if (!paths.length) {
-        toast('Could not read dropped file paths.', 'error');
+        toast(t('error.dropPaths'), 'error');
         return;
       }
       importPaths(paths);
@@ -1163,7 +1803,7 @@
 
     bind('#btn-transcribe', 'click', startTranscription);
     bind('#btn-check-engine', 'click', async () => {
-      toast('Checking engine capability…');
+      toast(t('msg.engineChecking'));
       await checkEngine(true);
     });
     $('#btn-cancel').addEventListener('click', cancelTranscription);
@@ -1171,6 +1811,69 @@
     bind('#btn-export', 'click', openExportDialog);
     bind('#btn-archive-export', 'click', backUpCase);
     bind('#btn-archive-import', 'click', restoreCase);
+    bind('#btn-notes', 'click', openNotes);
+    bind('#btn-report', 'click', openReport);
+    bind('#btn-delivery', 'click', () => $('#dialog-delivery').showModal());
+    bind('#btn-support', 'click', () => $('#dialog-support').showModal());
+    bind('#btn-edit-case', 'click', openCaseEdit);
+    bind('#btn-add-note', 'click', addNote);
+    bind('#btn-report-build', 'click', refreshChecklist);
+    bind('#btn-report-export', 'click', exportReport);
+
+    // Language selection. Default is Turkish; switching re-renders the static
+    // markup and the dynamic lists without reloading the window.
+    const localeSel = $('#select-locale');
+    if (localeSel) {
+      localeSel.addEventListener('change', (e) => setLocale(e.target.value));
+      localeSel.value = state.locale;
+      wiredControls.add(localeSel.id);
+    }
+
+    // Import queue controls.
+    bind('#btn-import-cancel', 'click', () => {
+      // Per-file import is fast and runs to completion; the button honestly
+      // reflects that there is nothing in-flight to cancel once the queue ends.
+      state.importActive = false;
+      renderImportQueue();
+    });
+    bind('#btn-import-retry', 'click', retryFailedImports);
+
+    // Transcription failure box actions.
+    bind('#btn-transcribe-retry', 'click', () => {
+      hideTranscribeError();
+      startTranscription();
+    });
+    bind('#btn-transcribe-error-details', 'click', () => {
+      const d = $('#transcribe-error-detail');
+      if (d) d.classList.toggle('hidden');
+    });
+    bind('#btn-transcribe-error-close', 'click', hideTranscribeError);
+
+    $('#chk-gpu').addEventListener('change', renderRuntimePanel);
+
+    $('#dialog-case-edit').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await saveCaseEdit();
+    });
+
+    $('#dialog-delivery').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await runDelivery();
+    });
+
+    $('#dialog-support').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await runSupportBundle();
+    });
+
+    $('#select-filter').addEventListener('change', (e) => {
+      state.filter = e.target.value;
+      renderTranscript();
+    });
+    $('#search-input').addEventListener('input', (e) => {
+      state.searchQuery = e.target.value;
+      renderTranscript();
+    });
     bind('#btn-open-exports', 'click', (e) => {
       e.preventDefault();
       openExportsFolder();
@@ -1214,22 +1917,22 @@
       try {
         await call(api.updates.check());
       } catch (err) {
-        toast(`Update check failed: ${errText(err)}`, 'error');
+        toast(`${t('error.updateCheck')}: ${errText(err)}`, 'error');
       }
     });
     $('#btn-update-download').addEventListener('click', async () => {
       try {
         await call(api.updates.download());
       } catch (err) {
-        toast(`Update download failed: ${errText(err)}`, 'error');
+        toast(`${t('error.updateDownload')}: ${errText(err)}`, 'error');
       }
     });
     $('#btn-update-postpone').addEventListener('click', async () => {
       try {
         await call(api.updates.postpone());
-        toast('Update postponed. Your current version keeps working.');
+        toast(t('msg.updatePostponed'));
       } catch (err) {
-        toast(`Could not postpone: ${errText(err)}`, 'error');
+        toast(`${t('error.postpone')}: ${errText(err)}`, 'error');
       }
     });
     bind('#btn-update-install', 'click', async () => {
@@ -1237,33 +1940,33 @@
       // let the user decline the update if they are not ready.
       if (state.store && state.store.dirty) {
         const save = await confirmDialog(
-          'Unsaved transcript changes',
-          'This case has unsaved transcript edits. Save them before restarting to install the update?'
+          t('confirm.updateUnsavedTitle'),
+          t('confirm.updateUnsavedBody')
         );
         if (save) {
           await saveTranscript();
           if (state.store && state.store.dirty) {
-            toast('Could not save; the update was not started.', 'error');
+            toast(t('error.saveFailed'), 'error');
             return;
           }
         } else {
           const proceed = await confirmDialog(
-            'Discard unsaved changes?',
-            'Restarting now will discard unsaved transcript edits. Continue?'
+            t('confirm.updateDiscardTitle'),
+            t('confirm.updateDiscardBody')
           );
           if (!proceed) return;
         }
       }
       const ok = await confirmDialog(
-        'Restart and install?',
-        'The application will close and restart into the new version. Your case data and speech model are not affected.'
+        t('confirm.updateRestartTitle'),
+        t('confirm.updateRestartBody')
       );
       if (!ok) return;
       try {
         const res = await call(api.updates.install());
-        if (res && res.ok === false) toast('The update is not ready to install yet.', 'error');
+        if (res && res.ok === false) toast(t('confirm.updateNotReady'), 'error');
       } catch (err) {
-        toast(`Could not start the update: ${errText(err)}`, 'error');
+        toast(`${t('error.updateStart')}: ${errText(err)}`, 'error');
       }
     });
     $('#btn-update-release-notes').addEventListener('click', () => {
@@ -1274,19 +1977,20 @@
       const btn = e.currentTarget;
       const recommended = state.models.find((m) => m.kind === 'asr' && m.recommended);
       if (!recommended) {
-        toast('No recommended model in the registry.', 'error');
+        toast(t('models.noneRecommended'), 'error');
         return;
       }
       btn.disabled = true;
-      btn.textContent = 'Downloading…';
+      btn.textContent = t('models.downloading');
+      resetModelProgress();
       try {
         await call(api.models.install(recommended.id));
-        toast('Model installed and verified.', 'success');
+        toast(t('models.installedOk'), 'success');
       } catch (err) {
-        toast(`Model install failed: ${errText(err)}`, 'error');
+        toast(`${t('error.modelImport')}: ${errText(err)}`, 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Install recommended model';
+        btn.textContent = t('empty.installRecommended');
         await refreshModels();
       }
     });
@@ -1299,8 +2003,8 @@
     $('#btn-delete-evidence').addEventListener('click', async () => {
       if (!state.activeEvidenceId) return;
       const ok = await confirmDialog(
-        'Remove evidence?',
-        'The imported copy and its transcript will be removed from this case. The original file on disk is not affected.'
+        t('confirm.removeEvidenceTitle'),
+        t('confirm.removeEvidenceBody')
       );
       if (!ok) return;
       try {
@@ -1309,9 +2013,9 @@
         state.evidence = await call(api.evidence.list(state.caseRecord.case_id));
         renderEvidenceList();
         showReview(null);
-        toast('Evidence removed.', 'success');
+        toast(t('msg.evidenceRemoved'), 'success');
       } catch (err) {
-        toast(`Remove failed: ${errText(err)}`, 'error');
+        toast(`${t('error.removeEvidence')}: ${errText(err)}`, 'error');
       }
     });
 
@@ -1351,6 +2055,13 @@
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         moveSegment(1);
+      } else if (e.key === 'F2' && state.activeSegmentId) {
+        e.preventDefault();
+        state.editingSegmentId = state.activeSegmentId;
+        renderTranscript();
+      } else if (e.key === 'F3' && state.activeSegmentId) {
+        e.preventDefault();
+        state.store && state.store.toggleFlag(state.activeSegmentId, 'REVISIT');
       }
     });
   }
