@@ -52,10 +52,11 @@ Implemented:
   segment paging, dashboard aggregates, archive provenance remap, UYAP hand-off,
   AI-disabled) and `tests/unit/v1-ui-wiring.test.js` (4 tests: i18n key
   completeness across locales, new DOM ids, renderer bindings, preload APIs).
-- `node scripts/verify-release.js --skip-package` → **9/9 gates passed**
-  (lint, unit, security, SemVer, lockfile, integration, packaged smoke,
-  packaged acceptance — 55 steps, engine capability report). Packaged smoke and
-  acceptance ran on the real `release/linux-unpacked` binary with FFmpeg,
+- `npm run build:linux` then `node scripts/verify-release.js --skip-package`
+  → **9/9 gates passed** (lint, unit, security, SemVer, lockfile, integration,
+  packaged smoke, packaged acceptance — 55 steps, engine capability report).
+  The Linux package was rebuilt from this branch before the run, so packaged
+  smoke and acceptance ran on a binary that contains the P14 code, with FFmpeg,
   `whisper-cli` v1.9.4, `ggml-large-v3-turbo-q5_0.bin` and
   `ggml-silero-v5.1.2.bin` present. CPU runtime; GPU runtime not bundled.
 
