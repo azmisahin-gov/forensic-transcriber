@@ -1,7 +1,9 @@
 # Verification
 
 Every result below comes from a command actually run in the build environment on
-2026-10-02. Nothing here is asserted without a command behind it.
+2026-10-02/03. Nothing here is asserted without a command behind it. Windows
+results come from the `windows-latest` CI runner; everything else from the Linux
+build environment.
 
 ## Environment
 
@@ -101,7 +103,7 @@ structured error rather than a crash:
 
 ## 4. Lint and security
 
-- `node scripts/lint.js` → **Lint OK — 35 files checked** (syntax plus
+- `node scripts/lint.js` → **Lint OK — 55 files checked** (syntax plus
   no-shell, no-eval, no-remote-script, no-hardcoded-secret, no-telemetry rules).
 - `node scripts/security-check.js` → **0 critical findings.** Confirmed:
   no telemetry dependency, the only outbound network path is the model
@@ -114,25 +116,30 @@ structured error rather than a crash:
 
 Command:
 ```
-FT_MODELS_DIR=... FT_WHISPER_CLI_PATH=... node scripts/verify-release.js --skip-package
+FT_MODELS_DIR=... FT_WHISPER_CLI_PATH=... FT_TEST_MODEL=... FT_TEST_VAD=... \
+  npm run verify:release
 ```
 
-Result: **9/9 gates pass.**
+Result (2026-10-03, P12): **10/10 gates passed.**
 
 ```
 PASS  lint
 PASS  unit tests
 PASS  security check
+PASS  package.json version is valid SemVer — 0.1.4
+PASS  package-lock.json matches package.json — lock 0.1.4 vs pkg 0.1.4
 PASS  integration tests
+PASS  package (linux dir)
 PASS  packaged smoke test
-PASS  packaged acceptance test — 20 steps
+PASS  packaged acceptance test — 47 steps
 PASS  engine capability report — cpu ok, gpu runtime not bundled, run mode cpu
-PASS  release artefacts + checksums — ForensicTranscriber-ModelPack-0.1.0.zip,
-      ForensicTranscriber-Portable-x64.zip, ForensicTranscriber-Setup-x64.exe
 ```
 
-(The `--skip-package` run reuses the existing packaged build; a full run also
-executes the packaging step as one of the gates.)
+The Windows release artefacts (`ForensicTranscriber-Setup-x64.exe`,
+`ForensicTranscriber-Portable-x64.zip`, `ForensicTranscriber-ModelPack-*.zip`)
+and `latest.yml` are produced by a Windows build and were not produced here;
+the Linux run reports `INFO release artefacts — none (dir build; run build:win
+for the installer/portable)` and `INFO updater metadata — no latest.yml yet`.
 
 Release artefacts (built by `npm run build:win` and
 `node scripts/build-model-package.js`):
@@ -154,40 +161,50 @@ FT_DATA_DIR=... FT_MODELS_DIR=... xvfb-run -a \
   ./release/linux-unpacked/forensic-transcriber --smoke-test --no-sandbox
 ```
 
-Result: `{"ok":true, ...}` — **11/11 steps**: window loaded, preload API exposed,
-`app.info` resolves, database open, FFmpeg available, FFprobe available, case
-create, case persisted, model registry readable, engine probe reachable, engine
-reports `gpuRuntimeBundled` flag.
+Result (2026-10-03, P12): `{"ok":true, ...}` — **19/19 steps**: window loaded,
+renderer booted without a fatal error, renderer dependency globals defined,
+renderer primary controls wired, renderer reports an application version
+(0.1.4), no uncaught renderer errors, preload API exposed, `app.info` resolves,
+database open, FFmpeg available, FFprobe available, case create, case persisted,
+model registry readable, engine probe reachable, engine reports
+`gpuRuntimeBundled` flag, update state reachable, update check is safe when
+disabled, updater disabled off-Windows.
 
 ### Acceptance test
 
 Command:
 ```
 FT_DATA_DIR=... FT_MODELS_DIR=... xvfb-run -a \
-  ./release/linux-unpacked/forensic-transcriber --acceptance-test --no-sandbox
+  ./release/linux-unpacked/forensic-transcriber --acceptance-test \
+  --acceptance-audio tests/fixtures/tr-known-events.wav \
+  --acceptance-model large-v3-turbo-q5_0 --no-sandbox
 ```
 
-Result: `{"ok":true, ...}` — **20/20 steps**:
+Result (2026-10-03, P12, real `ggml-large-v3-turbo-q5_0.bin`): `{"ok":true, ...}`
+— **47/47 steps.** The P0-critical steps:
 
 | Step | Result |
 | --- | --- |
-| Fresh launch | ok |
-| Create case | ok |
-| Import recording | ok |
-| Metadata visible | ok |
-| SHA-256 visible | ok |
+| Fresh launch / create case / import recording | ok |
+| Metadata visible / SHA-256 visible | ok |
 | Audio stream reachable (`ft-media:` Range request) | ok — HTTP 206, `audio/wav`, 1024 bytes |
-| Model installed | ok |
-| Transcribe | ok |
-| Turkish transcript produced (≥3 segments) | ok |
-| Segments are automatic | ok |
-| Segments carry timestamps | ok |
+| Transcribe (real model) | ok |
+| Turkish transcript produced / segments automatic / timestamps | ok |
 | Edit + save | ok |
-| Reopen: edit persists | ok |
-| Reopen: automatic preserved | ok |
-| Export (4 formats) | ok |
-| Export json/txt/srt/html written | ok |
-| Export json matches stored transcript | ok |
+| Reopen: edit persists / automatic preserved | ok |
+| Export (4 formats) + JSON matches stored transcript | ok |
+| Export records the transcript revision | ok |
+| Re-transcription completes | ok |
+| Re-transcription keeps the human revision current | ok (`revisionBecameCurrent === false`) |
+| Both transcript revisions are stored | ok |
+| Human edit still present after the new run | ok |
+| No orphan `STARTED` run remains | ok |
+| Every run is terminal with a finish time | ok |
+| UI: version, sidebar, open case, select/edit/speaker/split/merge/save/export | ok |
+| Case archive written / verifies / restored as a new case | ok |
+| Restored evidence count + hashes match | ok |
+| Evidence re-verification OK / database health ok | ok |
+| Transcription run provenance + input/model hashes recorded | ok |
 
 ## 6. Windows x64 runtime
 

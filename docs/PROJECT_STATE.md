@@ -42,23 +42,33 @@ Implemented:
   `tests/unit/p0-regression.test.js` (12 tests), all passing. These exercise real
   Storage/MediaService/archive code, not mocks; FFmpeg-dependent cases were run
   with FFmpeg 7.1.5 present.
-- `npm run verify:release` → 6/8 gates; the two failures are environment gates
-  (integration tests need `whisper-cli` + model, packaged app tests need a
-  packaged build), not code failures.
+- `npm run verify:release` → 10/10 gates passed (lint, unit, security, version,
+  lockfile, integration, package, packaged smoke, packaged acceptance, engine
+  report), with `whisper-cli` (v1.9.4), `ggml-large-v3-turbo-q5_0.bin` and
+  `ggml-silero-v5.1.2.bin` present.
+- **Packaged acceptance self-test:** `--acceptance-test` on the packaged Linux
+  build with the real model → 47/47 steps passed, including real re-transcription
+  (`revisionBecameCurrent === false`), run-lifecycle terminality, archive
+  restore, and export-revision linkage. Previously **NOT VERIFIED**.
+- **Windows CI:** `test-windows` job green on the pushed branch — 157 unit tests,
+  152 pass, 0 fail, 5 skipped; `security-check.js` 0 critical. Run
+  `37127085856` on `azmisahin-gov/forensic-transcriber`.
+- Atomic-import failure test made cross-platform (Windows ignores POSIX
+  directory permissions, so the old chmod-based failure injection did not fire
+  there; the copy call is now failed directly, still through real import code).
 
 ### Not verified in this environment (P12)
 
-- **Windows:** no Windows runner here. SQLite migration, atomic file operations
-  and path handling are covered by unit tests on Linux only; Windows CI must
-  confirm them.
-- **Packaged app / acceptance self-test:** `--acceptance-test` gained P0
-  re-transcription and run-lifecycle steps, but the packaged binary requires
-  `whisper-cli` and a model, which are not present here → **NOT VERIFIED**.
-- **Live re-transcription with a real whisper.cpp model:** the revision and
-  lifecycle invariants are proven with real storage code and real FFmpeg audio,
-  but the run was not driven with a loaded model.
+- **Windows packaged build / installer:** the Windows CI runner runs unit tests
+  and the security check only; no Windows installer or packaged-app launch was
+  exercised. `latest.yml` updater metadata is produced by a Windows build and
+  is not present here → **NOT VERIFIED**.
+- **Windows-only behaviour depth:** SQLite migration, atomic file operations and
+  path handling pass the unit suite on Windows CI, but no Windows acceptance or
+  packaged run was performed.
 - **GPU (`GPU capable` / `GPU selected` / `GPU actually used`):** not verified on
-  target NVIDIA hardware. No GPU claim is made.
+  target NVIDIA hardware (no RTX 3060 here). The bundled runtime is CPU-only;
+  no GPU claim is made.
 - **Long-recording memory (1/4/8 h):** the waveform path is now O(buckets) by
   construction and tested for bounded output, but no multi-hour recording was
   measured here.

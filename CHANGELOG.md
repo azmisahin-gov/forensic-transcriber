@@ -48,6 +48,9 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 - `schema_version` is now **4** (adds `evidence.audio_stream_count`).
 - Case archive format is now **version 2** (adds revisions); version 1 archives
   still restore.
+- The atomic-evidence-import regression test no longer relies on POSIX directory
+  permissions (Windows ignores them). It fails the copy call directly, so the
+  same regression runs on Windows CI as well as Linux.
 
 ## [0.1.4] - 2026-10-03
 
