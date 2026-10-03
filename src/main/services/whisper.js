@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { resolveBinary } = require('./paths');
 const { UNCLEAR_PLACEHOLDER } = require('../../shared/constants');
@@ -132,8 +133,18 @@ function parseRuntimeProbe(stderr) {
   };
 }
 
-function parseSegments(transcription) {
+/**
+ * Turn raw whisper output into transcript segments.
+ *
+ * `runId` scopes the generated segment ids. The engine numbers its segments from
+ * zero for every recording, so an id like `SEG-0000` is only unique within one
+ * transcription run. Prefixing with a per-run id keeps ids distinct even when a
+ * case holds many recordings, in addition to the (transcript_id, segment_id)
+ * key that already scopes them in the database.
+ */
+function parseSegments(transcription, runId = null) {
   const segments = [];
+  const prefix = runId ? `SEG-${runId}-` : 'SEG-';
   let index = 0;
   for (const raw of transcription) {
     const tokens = Array.isArray(raw.tokens) ? raw.tokens : [];
@@ -142,7 +153,7 @@ function parseSegments(transcription) {
     let text = (raw.text || '').replace(/\s+/g, ' ').trim();
     if (!text) text = UNCLEAR_PLACEHOLDER;
     segments.push({
-      segment_id: `SEG-${String(index).padStart(4, '0')}`,
+      segment_id: `${prefix}${String(index).padStart(4, '0')}`,
       start: raw.offsets.from / 1000,
       end: raw.offsets.to / 1000,
       speaker: 'SPEAKER_01',
@@ -304,6 +315,10 @@ class WhisperAdapter {
 
     this.lastInvocation = { binary: this.binaryPath, args };
 
+    // A short id unique to this run, used to scope the generated segment ids so
+    // two recordings in the same case can never produce the same id.
+    const runId = crypto.randomBytes(4).toString('hex');
+
     return new Promise((resolve, reject) => {
       let child;
       try {
@@ -368,7 +383,7 @@ class WhisperAdapter {
           reject(Object.assign(new Error('Could not read transcription output.'), { code: 'ASR_OUTPUT_MISSING' }));
           return;
         }
-        const segments = parseSegments(parsed.transcription || []);
+        const segments = parseSegments(parsed.transcription || [], runId);
         try {
           fs.rmSync(path.dirname(outBase), { recursive: true, force: true });
         } catch {

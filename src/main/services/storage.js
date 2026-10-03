@@ -11,7 +11,7 @@ const {
   UNCLEAR_PLACEHOLDER,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function nowIso() {
   return new Date().toISOString();
@@ -131,7 +131,11 @@ class Storage {
       );
 
       CREATE TABLE IF NOT EXISTS segments (
-        segment_id TEXT PRIMARY KEY,
+        -- A segment id is only meaningful within its transcript: the ASR engine
+        -- numbers segments from zero for every recording. The key is therefore
+        -- (transcript_id, segment_id), which keeps two recordings in the same
+        -- case from colliding.
+        segment_id TEXT NOT NULL,
         transcript_id TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
         ordinal INTEGER NOT NULL,
         start_seconds REAL NOT NULL,
@@ -145,7 +149,8 @@ class Storage {
         original_text TEXT,
         status TEXT NOT NULL DEFAULT 'AUTOMATIC',
         confidence REAL,
-        words_json TEXT
+        words_json TEXT,
+        PRIMARY KEY (transcript_id, segment_id)
       );
 
       CREATE TABLE IF NOT EXISTS history (
@@ -163,6 +168,70 @@ class Storage {
     `);
 
     this._migrateSegmentsOriginalText();
+    this._migrateSegmentsCompositeKey();
+    this.db
+      .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+      .run(String(SCHEMA_VERSION));
+  }
+
+  /**
+   * Schema migration: rebuild the segments table so its primary key is
+   * (transcript_id, segment_id) instead of segment_id alone.
+   *
+   * The earlier key made a second recording in the same case fail with
+   * "UNIQUE constraint failed: segments.segment_id", because every transcript
+   * numbers its segments from zero. Rows are copied as-is; nothing is dropped or
+   * merged, and the automatic text and provenance columns are preserved.
+   */
+  _migrateSegmentsCompositeKey() {
+    const pkColumns = this.db
+      .prepare('PRAGMA table_info(segments)')
+      .all()
+      .filter((c) => c.pk > 0)
+      .sort((a, b) => a.pk - b.pk)
+      .map((c) => c.name);
+    if (pkColumns.length === 2 && pkColumns[0] === 'transcript_id' && pkColumns[1] === 'segment_id') {
+      return; // already migrated
+    }
+    // Foreign keys are disabled for the rebuild and restored afterwards.
+    this.db.exec('PRAGMA foreign_keys = OFF');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.exec(`
+        CREATE TABLE segments_v2 (
+          segment_id TEXT NOT NULL,
+          transcript_id TEXT NOT NULL REFERENCES transcripts(transcript_id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          start_seconds REAL NOT NULL,
+          end_seconds REAL NOT NULL,
+          speaker TEXT NOT NULL DEFAULT 'SPEAKER_01',
+          text TEXT NOT NULL DEFAULT '',
+          original_text TEXT,
+          status TEXT NOT NULL DEFAULT 'AUTOMATIC',
+          confidence REAL,
+          words_json TEXT,
+          PRIMARY KEY (transcript_id, segment_id)
+        );
+        INSERT INTO segments_v2 (
+          segment_id, transcript_id, ordinal, start_seconds, end_seconds,
+          speaker, text, original_text, status, confidence, words_json
+        )
+        SELECT
+          segment_id, transcript_id, ordinal, start_seconds, end_seconds,
+          speaker, text, original_text, status, confidence, words_json
+        FROM segments;
+        DROP TABLE segments;
+        ALTER TABLE segments_v2 RENAME TO segments;
+        CREATE INDEX IF NOT EXISTS idx_segments_transcript ON segments(transcript_id, ordinal);
+      `);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
+    }
   }
 
   /**

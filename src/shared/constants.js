@@ -77,6 +77,8 @@
     EVIDENCE_LIST: 'evidence:list',
     EVIDENCE_DELETE: 'evidence:delete',
     EVIDENCE_REVEAL: 'evidence:reveal',
+    APP_REVEAL_DATA_DIR: 'app:reveal-data-dir',
+    EXPORT_REVEAL: 'export:reveal',
     EVIDENCE_WAVEFORM: 'evidence:waveform',
     TRANSCRIBE_START: 'transcribe:start',
     TRANSCRIBE_CANCEL: 'transcribe:cancel',

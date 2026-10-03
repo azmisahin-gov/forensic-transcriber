@@ -417,6 +417,24 @@ function registerIpc() {
     return true;
   });
 
+  // Open the folder that holds all local case data, so "Data folder" does
+  // something predictable instead of opening an unrelated picker.
+  handle(IPC.APP_REVEAL_DATA_DIR, async () => {
+    const dir = userDataDir();
+    fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+    return dir;
+  });
+
+  // Reveal a case's exports folder, creating it if the case has not exported yet.
+  handle(IPC.EXPORT_REVEAL, async (_e, caseId) => {
+    const kase = requireCase(caseId);
+    const dir = path.join(kase.case_dir, 'exports');
+    fs.mkdirSync(dir, { recursive: true });
+    await shell.openPath(dir);
+    return dir;
+  });
+
   handle(IPC.EVIDENCE_WAVEFORM, async (_e, evidenceId, buckets) => {
     const ev = await resolveEvidenceFile(evidenceId);
     const source = playbackPath(ev);
@@ -639,6 +657,11 @@ async function bootstrap() {
 
   if (process.argv.includes('--acceptance-test')) {
     await runAcceptanceTest();
+    return;
+  }
+
+  if (process.argv.includes('--multi-evidence-test')) {
+    await runMultiEvidenceTest();
     return;
   }
 
@@ -1013,11 +1036,147 @@ async function runAcceptanceTest() {
 }
 
 /**
- * Report the actual runtime capability of the packaged ASR binary and, when a
- * model is present, which device a real transcription used. This is the
- * mechanism that distinguishes a CUDA-capable binary from a CPU-only one and
- * makes GPU support verifiable on the target machine instead of assumed.
+ * Multi-evidence acceptance test.
+ *
+ * Regression gate for the v0.1.2 blocker: a second recording in the same case
+ * failed with "UNIQUE constraint failed: segments.segment_id". This drives the
+ * real packaged application through a case with many recordings, transcribes
+ * each one, reopens the case and verifies every transcript and the exports.
+ *
+ * Usage:
+ *   forensic-transcriber --multi-evidence-test [--multi-evidence-count 10]
+ *                        [--multi-evidence-audio <wav>] [--multi-evidence-model <id>]
  */
+async function runMultiEvidenceTest() {
+  const report = { ok: false, steps: [] };
+  const step = (name, ok, detail) => report.steps.push({ name, ok, detail });
+  const argOf = (flag, fallback) => {
+    const i = process.argv.indexOf(flag);
+    return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+  };
+  const count = Math.max(10, Number(argOf('--multi-evidence-count', '10')) || 10);
+  const audio = argOf('--multi-evidence-audio', path.join(__dirname, '..', '..', 'tests', 'fixtures', 'tr-offset.wav'));
+  const modelId = argOf('--multi-evidence-model', DEFAULT_ASR_MODEL_ID);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('window did not finish loading')), 30000);
+      mainWindow.webContents.once('did-finish-load', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      mainWindow.webContents.once('did-fail-load', (_e, code, desc) => {
+        clearTimeout(timer);
+        reject(new Error(`did-fail-load ${code} ${desc}`));
+      });
+    });
+    const js = (code) => mainWindow.webContents.executeJavaScript(code, true);
+
+    const rendererState = await waitForRendererBoot(15000);
+    step('renderer booted', Boolean(rendererState && rendererState.booted === true),
+      rendererState && rendererState.error ? rendererState.error : '');
+
+    const model = (await modelManager.list()).find((m) => m.id === modelId);
+    if (!model || !model.installed || !model.verified) {
+      step('model installed', false, `model ${modelId} not installed/verified`);
+      throw new Error('acceptance model not installed');
+    }
+    step('model installed', true);
+
+    // Build distinct input files so each evidence is a separate recording.
+    const workDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ft-multi-'));
+    const inputs = [];
+    for (let i = 0; i < count; i += 1) {
+      const p = path.join(workDir, `recording-${String(i).padStart(2, '0')}.wav`);
+      fs.copyFileSync(audio, p);
+      inputs.push(p);
+    }
+    step(`prepared ${count} distinct recordings`, inputs.length === count);
+
+    const created = await js('window.ft.cases.create({ title: \'Multi evidence run\', notes: \'auto\' })');
+    step('create case', created.ok === true);
+    const caseId = created.data.case_id;
+
+    // Import and transcribe each recording in turn.
+    const transcripts = [];
+    for (let i = 0; i < inputs.length; i += 1) {
+      const imported = await js(`window.ft.evidence.importFiles(${JSON.stringify(caseId)}, [${JSON.stringify(inputs[i])}])`);
+      if (!imported.ok || imported.data.imported.length !== 1) {
+        step(`import recording ${i + 1}`, false, JSON.stringify(imported.error || {}));
+        continue;
+      }
+      const ev = imported.data.imported[0];
+      const t = await js(`window.ft.transcribe.start({ caseId: ${JSON.stringify(caseId)}, evidenceId: ${JSON.stringify(ev.evidence_id)}, modelId: ${JSON.stringify(modelId)}, language: 'tr', useGpu: false, useVad: true })`);
+      if (!t.ok) {
+        step(`transcribe recording ${i + 1}`, false, JSON.stringify(t.error || {}));
+        continue;
+      }
+      step(`transcribe recording ${i + 1}`, t.data.segments.length >= 1);
+      transcripts.push({ evidenceId: ev.evidence_id, transcriptId: t.data.transcript.transcript_id, segments: t.data.segments });
+    }
+    step(`all ${count} recordings transcribed`, transcripts.length === count, `${transcripts.length}/${count}`);
+
+    // No two transcripts may share a segment row, and ids must be scoped.
+    const allIds = transcripts.flatMap((t) => t.segments.map((s) => `${t.transcriptId}::${s.segment_id}`));
+    step('no segment id collision across transcripts', new Set(allIds).size === allIds.length,
+      `${new Set(allIds).size} unique of ${allIds.length}`);
+
+    // Reopen the case through a fresh storage instance and confirm every transcript.
+    const reopen = new Storage(userDataDir());
+    let allPersisted = true;
+    for (const t of transcripts) {
+      const stored = reopen.getTranscript(caseId, t.evidenceId);
+      if (!stored || stored.transcript_id !== t.transcriptId) { allPersisted = false; break; }
+      const segs = reopen.getSegments(stored.transcript_id);
+      if (segs.length !== t.segments.length) { allPersisted = false; break; }
+    }
+    step('reopen: every transcript persists', allPersisted);
+
+    // Original evidence must be untouched: the hash of the imported copy still
+    // matches the source file for every recording.
+    let originalsIntact = true;
+    for (let i = 0; i < transcripts.length; i += 1) {
+      const ev = reopen.getEvidence(transcripts[i].evidenceId);
+      const src = inputs[i];
+      if (!ev || !fs.existsSync(ev.original_path)) { originalsIntact = false; break; }
+      if (fs.readFileSync(ev.original_path).length !== fs.readFileSync(src).length) { originalsIntact = false; break; }
+    }
+    step('original evidence untouched', originalsIntact);
+
+    // Export every evidence and confirm the files are written and consistent.
+    let exportedOk = true;
+    for (const t of transcripts) {
+      const res = await js(`window.ft.exports.run(${JSON.stringify(caseId)}, ${JSON.stringify(t.evidenceId)}, { formats: ['json','txt','srt','html'] })`);
+      if (!res.ok || res.data.length !== 4 || !res.data.every((f) => fs.existsSync(f.path) && f.bytes > 0)) {
+        exportedOk = false;
+        break;
+      }
+      const json = JSON.parse(fs.readFileSync(res.data.find((f) => f.format === 'json').path, 'utf8'));
+      const stored = reopen.getSegments(t.transcriptId);
+      if (json.segments.length !== stored.length) { exportedOk = false; break; }
+    }
+    step('export every evidence matches its transcript', exportedOk);
+    reopen.close();
+
+    // The UI must reflect the real counts after all of this.
+    await js('window.ft.cases.list()');
+    step('case list reflects the recordings', await js(`(async () => {
+      const res = await window.ft.cases.list();
+      const k = res.data.find((c) => c.case_id === ${JSON.stringify(caseId)});
+      return Boolean(k) && Number(k.evidence_count) === ${count};
+    })()`));
+
+    report.ok = report.steps.every((s) => s.ok);
+  } catch (err) {
+    report.error = err.message;
+  }
+
+  // eslint-disable-next-line no-console
+  process.stdout.write(`MULTI_EVIDENCE_RESULT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  app.exit(report.ok ? 0 : 1);
+}
+
 async function runEngineReport() {
   const argOf = (flag, fallback) => {
     const i = process.argv.indexOf(flag);
