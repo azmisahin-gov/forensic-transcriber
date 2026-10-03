@@ -3,6 +3,7 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { Readable } = require('node:stream');
 
 const { IPC, SUPPORTED_EXTENSIONS, HISTORY_ACTIONS } = require('../shared/constants');
@@ -15,6 +16,11 @@ const { WhisperAdapter } = require('./services/whisper');
 const { RuntimeSelector } = require('./services/runtime-selector');
 const { runExport } = require('./services/exporter');
 const { writeCaseArchive, restoreCaseArchive } = require('./services/case-archive');
+const reports = require('./services/reports');
+const { reportToDocx, reportToPdf } = require('./services/report-render');
+const { writeDeliveryPackage, buildDeliveryPackage } = require('./services/delivery');
+const { writeSupportBundle, buildSupportBundle } = require('./services/support');
+const { copyFileAtomic, writeFileAtomic } = require('./services/atomic');
 const { createUpdater, STATES: UPDATE_STATES } = require('./services/updater');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
 
@@ -211,6 +217,86 @@ function playbackPath(ev) {
   return ev.original_path;
 }
 
+/** Assemble the application information payload (used by IPC and support). */
+async function buildAppInfo() {
+  const mediaStatus = await media.available();
+  const models = await modelManager.list();
+  return {
+    name: 'Forensic Transcriber',
+    version: app.getVersion(),
+    scope: '56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi',
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    node: process.versions.node,
+    dataDir: userDataDir(),
+    modelsDir: modelsDir(),
+    engine: whisper.describe(),
+    engineVersion: await whisper.version(),
+    media: mediaStatus,
+    modelReady: models.some((m) => m.kind === 'asr' && m.installed && m.verified),
+    defaultModelId: DEFAULT_ASR_MODEL_ID,
+    supportedExtensions: SUPPORTED_EXTENSIONS,
+    storage: storage.stats(),
+    engineProbe: engineProbeCache,
+    lastRunMode,
+  };
+}
+
+/** Compact engine/runtime provenance summary for reports and delivery packages. */
+function currentEngineInfo() {
+  const mode = lastRunMode || {};
+  return {
+    engine: 'whisper.cpp',
+    engineVersion: engineProbeCache ? engineProbeCache.engineVersion : null,
+    modelId: DEFAULT_ASR_MODEL_ID,
+    modelSha256: (getModel(DEFAULT_ASR_MODEL_ID) || {}).sha256 || null,
+    runtimeMode: mode.mode || null,
+    runtimeReason: mode.reason || null,
+    gpuRuntimeBundled: mode.gpuRuntimeBundled ?? null,
+    gpuSelected: mode.gpuSelected ?? null,
+    vadModel: DEFAULT_VAD_MODEL_ID,
+    appVersion: app.getVersion(),
+  };
+}
+
+/** Re-verify every evidence copy's hash for a case. Never rewrites anything. */
+async function verifyEvidenceIntegrity(evidence) {
+  const integrity = [];
+  for (const ev of evidence) {
+    if (!fs.existsSync(ev.original_path)) {
+      integrity.push({ evidence_id: ev.evidence_id, status: 'MISSING' });
+      continue;
+    }
+    const actual = await sha256File(ev.original_path);
+    integrity.push({
+      evidence_id: ev.evidence_id,
+      status: actual === ev.sha256 ? 'OK' : 'MISMATCH',
+      storedSha256: ev.sha256,
+      actualSha256: actual,
+    });
+  }
+  return integrity;
+}
+
+/** Build a structured report from the case's verified data (no writes). */
+async function buildReportForCase(caseId) {
+  const kase = requireCase(caseId);
+  const evidence = storage.listEvidence(caseId);
+  const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
+  const notes = storage.listNotes(caseId);
+  const report = storage.getReport(caseId);
+  return reports.buildReport({
+    caseRecord: kase,
+    evidence,
+    transcripts,
+    notes,
+    engineInfo: currentEngineInfo(),
+    report,
+  });
+}
+
+
 function registerMediaProtocol() {
   protocol.handle(MEDIA_SCHEME, async (request) => {
     try {
@@ -267,30 +353,7 @@ function registerMediaProtocol() {
 }
 
 function registerIpc() {
-  handle(IPC.APP_INFO, async () => {
-    const mediaStatus = await media.available();
-    const models = await modelManager.list();
-    return {
-      name: 'Forensic Transcriber',
-      version: app.getVersion(),
-      scope: '56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi',
-      platform: process.platform,
-      arch: process.arch,
-      electron: process.versions.electron,
-      node: process.versions.node,
-      dataDir: userDataDir(),
-      modelsDir: modelsDir(),
-      engine: whisper.describe(),
-      engineVersion: await whisper.version(),
-      media: mediaStatus,
-      modelReady: models.some((m) => m.kind === 'asr' && m.installed && m.verified),
-      defaultModelId: DEFAULT_ASR_MODEL_ID,
-      supportedExtensions: SUPPORTED_EXTENSIONS,
-      storage: storage.stats(),
-      engineProbe: engineProbeCache,
-      lastRunMode,
-    };
-  });
+  handle(IPC.APP_INFO, async () => buildAppInfo());
 
   // Report what the ASR runtimes can actually do. Requires an installed model
   // (the engine must load one to enumerate devices); the result is cached.
@@ -618,6 +681,174 @@ function registerIpc() {
       files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
     });
     return written;
+  });
+
+  // --------------------------------------------------------- dashboard/notes
+  handle(IPC.CASE_DASHBOARD, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.caseDashboard(caseId);
+  });
+
+  handle(IPC.NOTE_LIST, async (_e, caseId, evidenceId) => {
+    requireCase(caseId);
+    return storage.listNotes(caseId, { evidenceId: evidenceId || null });
+  });
+  handle(IPC.NOTE_CREATE, async (_e, caseId, input) => {
+    requireCase(caseId);
+    const note = storage.createNote(caseId, input || {});
+    return note;
+  });
+  handle(IPC.NOTE_UPDATE, async (_e, noteId, patch) => storage.updateNote(noteId, patch || {}));
+  handle(IPC.NOTE_DELETE, async (_e, noteId) => storage.deleteNote(noteId));
+
+  handle(IPC.SEARCH_CASE, async (_e, caseId, query) => {
+    requireCase(caseId);
+    return storage.searchCase(caseId, query);
+  });
+
+  // ------------------------------------------------------------ report space
+  handle(IPC.REPORT_TEMPLATES, async () =>
+    Object.entries(reports.TEMPLATES).map(([id, t]) => ({ id, label: t.label, sections: t.sections }))
+  );
+  handle(IPC.REPORT_GET, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.getReport(caseId);
+  });
+  handle(IPC.REPORT_SAVE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.saveReport(caseId, payload || {});
+  });
+  handle(IPC.REPORT_BUILD, async (_e, caseId) => {
+    requireCase(caseId);
+    return buildReportForCase(caseId);
+  });
+  handle(IPC.REPORT_CHECKLIST, async (_e, caseId) => {
+    requireCase(caseId);
+    const kase = storage.getCase(caseId);
+    const evidence = storage.listEvidence(caseId);
+    const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
+    const integrity = await verifyEvidenceIntegrity(evidence);
+    const report = storage.getReport(caseId);
+    const dashboard = storage.caseDashboard(caseId);
+    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard });
+  });
+
+  // Render the report to the requested formats, written to a folder the user
+  // picks. The report always records the revision each excerpt came from.
+  handle(IPC.REPORT_EXPORT, async (_e, caseId, options = {}) => {
+    const kase = requireCase(caseId);
+    const built = await buildReportForCase(caseId);
+    const formats = Array.isArray(options.formats) && options.formats.length
+      ? options.formats
+      : ['docx', 'pdf', 'html', 'txt'];
+    const dir = options.outputDir
+      ? options.outputDir
+      : path.join(kase.case_dir, 'exports', 'report');
+    fs.mkdirSync(dir, { recursive: true });
+    const written = [];
+    for (const format of formats) {
+      let content;
+      let ext;
+      let mime;
+      if (format === 'docx') {
+        content = reportToDocx(built);
+        ext = 'docx';
+        mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (format === 'pdf') {
+        content = reportToPdf(built);
+        ext = 'pdf';
+        mime = 'application/pdf';
+      } else if (format === 'html') {
+        content = reports.reportToHtml(built);
+        ext = 'html';
+        mime = 'text/html';
+      } else if (format === 'txt') {
+        content = reports.reportToTxt(built);
+        ext = 'txt';
+        mime = 'text/plain';
+      } else {
+        throw Object.assign(new Error(`Unsupported report format: ${format}`), { code: 'REPORT_FORMAT_UNSUPPORTED' });
+      }
+      const filePath = path.join(dir, `report.${ext}`);
+      writeFileAtomic(filePath, content);
+      written.push({
+        format,
+        mime,
+        path: filePath,
+        bytes: Buffer.byteLength(content),
+        sha256: crypto.createHash('sha256').update(content).digest('hex'),
+      });
+    }
+    storage.recordHistory(caseId, 'REPORT_EXPORTED', caseId, {
+      formats: written.map((w) => w.format),
+      files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
+    });
+    return { dir, files: written, report: built };
+  });
+
+  // ---------------------------------------------------------- delivery pkg
+  handle(IPC.DELIVERY_BUILD, async (_e, caseId, options = {}) => {
+    const kase = requireCase(caseId);
+    const suggested = `${(kase.title || 'case').replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 60)}__${caseId}.ftdelivery.tar.gz`;
+    const picked = options.destPath
+      ? { canceled: false, filePath: options.destPath }
+      : await dialog.showSaveDialog(mainWindow, {
+          title: 'Create delivery package',
+          defaultPath: suggested,
+          filters: [{ name: 'Forensic Transcriber delivery package', extensions: ['tar.gz', 'ftdelivery'] }],
+        });
+    if (picked.canceled || !picked.filePath) return { canceled: true };
+    const result = await writeDeliveryPackage({
+      storage,
+      caseId,
+      engineInfo: currentEngineInfo(),
+      includeEvidence: Boolean(options.includeEvidence),
+      destPath: picked.filePath,
+      onProgress: (p) => send(IPC.TRANSCRIBE_PROGRESS, { kind: 'delivery', ...p }),
+    });
+    storage.recordHistory(caseId, 'DELIVERY_PACKAGE', caseId, {
+      path: result.path,
+      sha256: result.sha256,
+      bytes: result.bytes,
+      includeEvidence: Boolean(options.includeEvidence),
+    });
+    return result;
+  });
+
+  // ------------------------------------------------------- preferences/diag
+  handle(IPC.PREF_ALL, async () => storage.allPreferences());
+  handle(IPC.PREF_SET, async (_e, key, value) => {
+    storage.setPreference(key, value);
+    return storage.allPreferences();
+  });
+  handle(IPC.DIAGNOSTICS_LIST, async (_e, limit) => storage.listDiagnostics(limit));
+  handle(IPC.DIAGNOSTICS_RECORD, async (_e, entry) => {
+    storage.recordDiagnostic(entry || {});
+    return true;
+  });
+  // Build the local support bundle. Nothing is uploaded: the file is written
+  // where the user chooses so they decide whether to share it.
+  handle(IPC.SUPPORT_BUNDLE, async (_e, options = {}) => {
+    const suggested = `forensic-transcriber-support-${new Date().toISOString().replace(/[:.]/g, '-')}.tar.gz`;
+    const picked = options.destPath
+      ? { canceled: false, filePath: options.destPath }
+      : await dialog.showSaveDialog(mainWindow, {
+          title: 'Save support bundle',
+          defaultPath: suggested,
+          filters: [{ name: 'Support bundle', extensions: ['tar.gz'] }],
+        });
+    if (picked.canceled || !picked.filePath) return { canceled: true };
+    const appInfo = await buildAppInfo();
+    const result = writeSupportBundle({
+      destPath: picked.filePath,
+      appInfo,
+      engineInfo: currentEngineInfo(),
+      diagnostics: storage.listDiagnostics(200),
+      logFile: logger ? logger.file : null,
+      extra: options.extra || {},
+    });
+    storage.recordDiagnostic({ level: 'info', category: 'support', summary: 'support bundle created', detail: { bytes: result.bytes } });
+    return result;
   });
 
   handle(IPC.TRANSCRIBE_CANCEL, async (event) => {

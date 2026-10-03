@@ -32,10 +32,40 @@ const api = {
     open: (caseId) => ipcRenderer.invoke(IPC.CASE_OPEN, caseId),
     update: (caseId, patch) => ipcRenderer.invoke(IPC.CASE_UPDATE, caseId, patch),
     remove: (caseId) => ipcRenderer.invoke(IPC.CASE_DELETE, caseId),
+    dashboard: (caseId) => ipcRenderer.invoke(IPC.CASE_DASHBOARD, caseId),
     archiveExport: (caseId) => ipcRenderer.invoke(IPC.CASE_ARCHIVE_EXPORT, caseId),
     archiveImport: () => ipcRenderer.invoke(IPC.CASE_ARCHIVE_IMPORT),
     history: (caseId) => ipcRenderer.invoke(IPC.HISTORY_LIST, caseId),
     runs: (caseId, evidenceId) => ipcRenderer.invoke(IPC.HISTORY_RUNS, caseId, evidenceId),
+  },
+  notes: {
+    list: (caseId, evidenceId) => ipcRenderer.invoke(IPC.NOTE_LIST, caseId, evidenceId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.NOTE_CREATE, caseId, input),
+    update: (noteId, patch) => ipcRenderer.invoke(IPC.NOTE_UPDATE, noteId, patch),
+    remove: (noteId) => ipcRenderer.invoke(IPC.NOTE_DELETE, noteId),
+  },
+  search: {
+    case: (caseId, query) => ipcRenderer.invoke(IPC.SEARCH_CASE, caseId, query),
+  },
+  report: {
+    get: (caseId) => ipcRenderer.invoke(IPC.REPORT_GET, caseId),
+    templates: () => ipcRenderer.invoke(IPC.REPORT_TEMPLATES),
+    save: (caseId, payload) => ipcRenderer.invoke(IPC.REPORT_SAVE, caseId, payload),
+    build: (caseId) => ipcRenderer.invoke(IPC.REPORT_BUILD, caseId),
+    export: (caseId, options) => ipcRenderer.invoke(IPC.REPORT_EXPORT, caseId, options),
+    checklist: (caseId) => ipcRenderer.invoke(IPC.REPORT_CHECKLIST, caseId),
+  },
+  delivery: {
+    build: (caseId, options) => ipcRenderer.invoke(IPC.DELIVERY_BUILD, caseId, options),
+  },
+  preferences: {
+    all: () => ipcRenderer.invoke(IPC.PREF_ALL),
+    set: (key, value) => ipcRenderer.invoke(IPC.PREF_SET, key, value),
+  },
+  diagnostics: {
+    list: (limit) => ipcRenderer.invoke(IPC.DIAGNOSTICS_LIST, limit),
+    record: (entry) => ipcRenderer.invoke(IPC.DIAGNOSTICS_RECORD, entry),
+    bundle: (options) => ipcRenderer.invoke(IPC.SUPPORT_BUNDLE, options),
   },
   evidence: {
     importFiles: (caseId, paths) => ipcRenderer.invoke(IPC.EVIDENCE_IMPORT, caseId, paths),

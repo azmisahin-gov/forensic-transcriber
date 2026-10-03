@@ -13,7 +13,21 @@ const {
   UNCLEAR_PLACEHOLDER,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
+
+// Assignable case metadata (56.12 görevlendirme / intake). Free text, no legal
+// interpretation is derived from it. Stored on the case row so a case is
+// self-contained; exported in archives and reports.
+const CASE_ASSIGNMENT_FIELDS = Object.freeze([
+  'file_number',
+  'authority',
+  'case_type',
+  'assignment_date',
+  'due_date',
+  'assignment_description',
+  'requested_questions',
+  'scope',
+]);
 
 /**
  * Map the most advanced human status in a transcript to the revision state that
@@ -182,6 +196,7 @@ class Storage {
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
     this._migrateEvidenceAudioStreamCount();
+    this._migrateCaseAssignment();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
@@ -324,11 +339,62 @@ class Storage {
         segments_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_revisions_transcript ON transcript_revisions(transcript_id, created_at);
+
+      -- Working notes / bookmarks anchored to a recording timestamp. Personal
+      -- work aids, not legal findings. kind separates a plain note from a
+      -- bookmark so the workspace can filter them.
+      CREATE TABLE IF NOT EXISTS notes (
+        note_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE CASCADE,
+        at_seconds REAL,
+        kind TEXT NOT NULL DEFAULT 'NOTE',
+        category TEXT,
+        body TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_notes_case ON notes(case_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_notes_evidence ON notes(evidence_id, at_seconds);
+
+      -- Structured report document for a case. One row per case; the sections
+      -- are stored as JSON so the operator can reorder/rename them, and the
+      -- renderer builds DOCX/PDF/HTML/TXT from the same data.
+      CREATE TABLE IF NOT EXISTS reports (
+        case_id TEXT PRIMARY KEY REFERENCES cases(case_id) ON DELETE CASCADE,
+        template TEXT NOT NULL DEFAULT 'generic',
+        title TEXT NOT NULL DEFAULT '',
+        sections_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      -- Local key/value preferences (panel sizes, playback, defaults). Never
+      -- leaves the machine.
+      CREATE TABLE IF NOT EXISTS preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      -- Local support diagnostics ring buffer. Redacted; never contains
+      -- transcript text, audio or case content.
+      CREATE TABLE IF NOT EXISTS diagnostics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        level TEXT NOT NULL,
+        category TEXT NOT NULL,
+        code TEXT,
+        summary TEXT,
+        detail_json TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_diagnostics_created ON diagnostics(created_at);
     `);
 
     this._migrateSegmentsOriginalText();
     this._migrateSegmentsCompositeKey();
     this._migrateEvidenceAudioStreamCount();
+    this._migrateCaseAssignment();
     this.db
       .prepare(`INSERT INTO meta(key, value) VALUES('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
@@ -346,6 +412,27 @@ class Storage {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.db.exec('ALTER TABLE evidence ADD COLUMN audio_stream_count INTEGER');
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Schema migration: add the case-assignment (görevlendirme) columns to
+   * databases created before case intake existed. Existing cases get empty
+   * strings, which the UI treats as "not filled in yet".
+   */
+  _migrateCaseAssignment() {
+    const columns = this.db.prepare('PRAGMA table_info(cases)').all().map((c) => c.name);
+    const missing = CASE_ASSIGNMENT_FIELDS.filter((f) => !columns.includes(f));
+    if (!missing.length) return;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const field of missing) {
+        this.db.exec(`ALTER TABLE cases ADD COLUMN ${field} TEXT NOT NULL DEFAULT ''`);
+      }
       this.db.exec('COMMIT');
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -455,7 +542,7 @@ class Storage {
       .run(caseId, action, target, detail ? JSON.stringify(detail) : null, nowIso());
   }
 
-  createCase({ title, notes = '' }) {
+  createCase({ title, notes = '', ...assignment }) {
     const cleanTitle = String(title || '').trim();
     if (!cleanTitle) {
       const err = new Error('Case title is required.');
@@ -468,11 +555,14 @@ class Storage {
       fs.mkdirSync(path.join(dir, sub), { recursive: true });
     }
     const ts = nowIso();
-    this.db
-      .prepare(
-        'INSERT INTO cases(case_id, title, notes, case_dir, created_at, updated_at) VALUES(?,?,?,?,?,?)'
-      )
-      .run(caseId, cleanTitle, String(notes || ''), dir, ts, ts);
+    const assign = {};
+    for (const field of CASE_ASSIGNMENT_FIELDS) {
+      assign[field] = assignment[field] === undefined || assignment[field] === null ? '' : String(assignment[field]);
+    }
+    const cols = ['case_id', 'title', 'notes', 'case_dir', 'created_at', 'updated_at', ...CASE_ASSIGNMENT_FIELDS];
+    const placeholders = cols.map(() => '?').join(',');
+    const values = [caseId, cleanTitle, String(notes || ''), dir, ts, ts, ...CASE_ASSIGNMENT_FIELDS.map((f) => assign[f])];
+    this.db.prepare(`INSERT INTO cases(${cols.join(',')}) VALUES(${placeholders})`).run(...values);
     this.recordHistory(caseId, HISTORY_ACTIONS.CASE_CREATED, caseId, { title: cleanTitle });
     return this.getCase(caseId);
   }
@@ -493,24 +583,85 @@ class Storage {
     return row;
   }
 
-  updateCase(caseId, { title, notes }) {
+  updateCase(caseId, patch = {}) {
     const existing = this.getCase(caseId);
     if (!existing) {
       const err = new Error(`Case not found: ${caseId}`);
       err.code = 'CASE_NOT_FOUND';
       throw err;
     }
-    const nextTitle = title === undefined ? existing.title : String(title).trim();
+    const nextTitle = patch.title === undefined ? existing.title : String(patch.title).trim();
     if (!nextTitle) {
       const err = new Error('Case title is required.');
       err.code = 'CASE_TITLE_REQUIRED';
       throw err;
     }
-    const nextNotes = notes === undefined ? existing.notes : String(notes);
-    this.db
-      .prepare('UPDATE cases SET title = ?, notes = ?, updated_at = ? WHERE case_id = ?')
-      .run(nextTitle, nextNotes, nowIso(), caseId);
+    const sets = ['title = ?', 'notes = ?', 'updated_at = ?'];
+    const values = [nextTitle, patch.notes === undefined ? existing.notes : String(patch.notes), nowIso()];
+    for (const field of CASE_ASSIGNMENT_FIELDS) {
+      if (patch[field] === undefined) continue;
+      sets.push(`${field} = ?`);
+      values.push(patch[field] === null ? '' : String(patch[field]));
+    }
+    values.push(caseId);
+    this.db.prepare(`UPDATE cases SET ${sets.join(', ')} WHERE case_id = ?`).run(...values);
     return this.getCase(caseId);
+  }
+
+  /**
+   * Operational summary for the case dashboard. Counts are derived from the
+   * live tables so the dashboard can never show a stale snapshot.
+   */
+  caseDashboard(caseId) {
+    const kase = this.getCase(caseId);
+    if (!kase) {
+      const err = new Error(`Case not found: ${caseId}`);
+      err.code = 'CASE_NOT_FOUND';
+      throw err;
+    }
+    const evidence = this.listEvidence(caseId);
+    const one = (sql, ...args) => Number(this.db.prepare(sql).get(...args).n);
+    let transcribed = 0;
+    let reviewed = 0;
+    let verified = 0;
+    let unclear = 0;
+    let segmentsTotal = 0;
+    for (const ev of evidence) {
+      const t = this.getTranscript(caseId, ev.evidence_id);
+      if (!t) continue;
+      transcribed += 1;
+      const segs = this.getSegments(t.transcript_id);
+      segmentsTotal += segs.length;
+      if (segs.length && segs.every((s) => s.status === SEGMENT_STATUS.VERIFIED)) verified += 1;
+      else if (segs.some((s) => s.status === SEGMENT_STATUS.REVIEWED || s.status === SEGMENT_STATUS.EDITED || s.status === SEGMENT_STATUS.VERIFIED)) reviewed += 1;
+      unclear += segs.filter((s) => s.status === SEGMENT_STATUS.AUTOMATIC && s.text === UNCLEAR_PLACEHOLDER).length;
+    }
+    const failedRuns = one(
+      `SELECT COUNT(*) AS n FROM transcription_runs WHERE case_id = ? AND status = 'FAILED'`,
+      caseId
+    );
+    const missingAssignment = CASE_ASSIGNMENT_FIELDS.filter((f) => !String(kase[f] || '').trim()).length;
+    return {
+      case_id: caseId,
+      title: kase.title,
+      due_date: kase.due_date || null,
+      updated_at: kase.updated_at,
+      evidence: evidence.length,
+      transcribed,
+      reviewed,
+      verified,
+      pending: evidence.length - transcribed,
+      segments: segmentsTotal,
+      unclear_segments: unclear,
+      failed_runs: failedRuns,
+      notes: one('SELECT COUNT(*) AS n FROM notes WHERE case_id = ?', caseId),
+      revisions: one(
+        `SELECT COUNT(*) AS n FROM transcript_revisions r
+           JOIN transcripts t ON t.transcript_id = r.transcript_id WHERE t.case_id = ?`,
+        caseId
+      ),
+      missing_assignment_fields: missingAssignment,
+    };
   }
 
   deleteCase(caseId) {
@@ -1187,6 +1338,275 @@ class Storage {
     }));
   }
 
+  // ------------------------------------------------------------------- notes
+  _describeNote(row) {
+    if (!row) return null;
+    return {
+      note_id: row.note_id,
+      case_id: row.case_id,
+      evidence_id: row.evidence_id,
+      at_seconds: row.at_seconds === null || row.at_seconds === undefined ? null : Number(row.at_seconds),
+      kind: row.kind,
+      category: row.category,
+      body: row.body,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  createNote(caseId, { evidenceId = null, atSeconds = null, kind = 'NOTE', category = null, body = '' } = {}) {
+    const kase = this.getCase(caseId);
+    if (!kase) {
+      const err = new Error(`Case not found: ${caseId}`);
+      err.code = 'CASE_NOT_FOUND';
+      throw err;
+    }
+    if (evidenceId && !this.getEvidence(evidenceId)) {
+      const err = new Error('Evidence not found.');
+      err.code = 'EVIDENCE_NOT_FOUND';
+      throw err;
+    }
+    const noteId = makeId('NOTE');
+    const ts = nowIso();
+    const at = atSeconds === null || atSeconds === undefined ? null : Number(atSeconds);
+    this.db
+      .prepare(
+        `INSERT INTO notes(note_id, case_id, evidence_id, at_seconds, kind, category, body, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        noteId,
+        caseId,
+        evidenceId,
+        Number.isFinite(at) ? at : null,
+        String(kind || 'NOTE'),
+        category === null || category === undefined ? null : String(category),
+        String(body || ''),
+        ts,
+        ts
+      );
+    this.recordHistory(caseId, kind === 'BOOKMARK' ? 'BOOKMARK_ADDED' : 'NOTE_ADDED', evidenceId, {
+      noteId,
+      atSeconds: Number.isFinite(at) ? at : null,
+    });
+    this._touchCase(caseId);
+    return this._describeNote(this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId));
+  }
+
+  updateNote(noteId, { body, category, kind } = {}) {
+    const row = this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId);
+    if (!row) {
+      const err = new Error('Note not found.');
+      err.code = 'NOTE_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    if (body !== undefined) {
+      sets.push('body = ?');
+      values.push(String(body));
+    }
+    if (category !== undefined) {
+      sets.push('category = ?');
+      values.push(category === null ? null : String(category));
+    }
+    if (kind !== undefined) {
+      sets.push('kind = ?');
+      values.push(String(kind));
+    }
+    values.push(noteId);
+    this.db.prepare(`UPDATE notes SET ${sets.join(', ')} WHERE note_id = ?`).run(...values);
+    return this._describeNote(this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId));
+  }
+
+  deleteNote(noteId) {
+    const row = this.db.prepare('SELECT * FROM notes WHERE note_id = ?').get(noteId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM notes WHERE note_id = ?').run(noteId);
+    this.recordHistory(row.case_id, 'NOTE_DELETED', row.evidence_id, { noteId });
+    return true;
+  }
+
+  listNotes(caseId, { evidenceId = null } = {}) {
+    const rows = evidenceId
+      ? this.db.prepare('SELECT * FROM notes WHERE case_id = ? AND evidence_id = ? ORDER BY at_seconds ASC, created_at ASC').all(caseId, evidenceId)
+      : this.db.prepare('SELECT * FROM notes WHERE case_id = ? ORDER BY created_at ASC').all(caseId);
+    return rows.map((r) => this._describeNote(r));
+  }
+
+  // ----------------------------------------------------------------- reports
+  getReport(caseId) {
+    const row = this.db.prepare('SELECT * FROM reports WHERE case_id = ?').get(caseId);
+    if (!row) return null;
+    return {
+      case_id: row.case_id,
+      template: row.template,
+      title: row.title,
+      sections: row.sections_json ? JSON.parse(row.sections_json) : [],
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  saveReport(caseId, { template = 'generic', title = '', sections = [] } = {}) {
+    const kase = this.getCase(caseId);
+    if (!kase) {
+      const err = new Error(`Case not found: ${caseId}`);
+      err.code = 'CASE_NOT_FOUND';
+      throw err;
+    }
+    const existing = this.getReport(caseId);
+    const ts = nowIso();
+    const payload = JSON.stringify(Array.isArray(sections) ? sections : []);
+    if (existing) {
+      this.db
+        .prepare('UPDATE reports SET template = ?, title = ?, sections_json = ?, updated_at = ? WHERE case_id = ?')
+        .run(String(template), String(title || ''), payload, ts, caseId);
+    } else {
+      this.db
+        .prepare(
+          'INSERT INTO reports(case_id, template, title, sections_json, created_at, updated_at) VALUES(?,?,?,?,?,?)'
+        )
+        .run(caseId, String(template), String(title || ''), payload, ts, ts);
+    }
+    this.recordHistory(caseId, 'REPORT_SAVED', caseId, { template, sectionCount: (Array.isArray(sections) ? sections : []).length });
+    this._touchCase(caseId);
+    return this.getReport(caseId);
+  }
+
+  // ------------------------------------------------------------ preferences
+  getPreference(key, fallback = null) {
+    const row = this.db.prepare('SELECT value FROM preferences WHERE key = ?').get(String(key));
+    if (!row) return fallback;
+    try {
+      return JSON.parse(row.value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  setPreference(key, value) {
+    this.db
+      .prepare(
+        `INSERT INTO preferences(key, value, updated_at) VALUES(?,?,?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+      )
+      .run(String(key), JSON.stringify(value === undefined ? null : value), nowIso());
+    return value;
+  }
+
+  allPreferences() {
+    const out = {};
+    for (const row of this.db.prepare('SELECT key, value FROM preferences').all()) {
+      try {
+        out[row.key] = JSON.parse(row.value);
+      } catch {
+        out[row.key] = null;
+      }
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------ diagnostics
+  recordDiagnostic({ level = 'info', category = 'app', code = null, summary = '', detail = null } = {}) {
+    this.db
+      .prepare(
+        'INSERT INTO diagnostics(level, category, code, summary, detail_json, created_at) VALUES(?,?,?,?,?,?)'
+      )
+      .run(
+        String(level),
+        String(category),
+        code === null ? null : String(code),
+        String(summary || '').slice(0, 500),
+        detail === null ? null : JSON.stringify(detail),
+        nowIso()
+      );
+    // Keep the ring buffer bounded so it never grows without limit.
+    this.db
+      .prepare(
+        'DELETE FROM diagnostics WHERE id NOT IN (SELECT id FROM diagnostics ORDER BY id DESC LIMIT 500)'
+      )
+      .run();
+  }
+
+  listDiagnostics(limit = 200) {
+    const rows = this.db
+      .prepare('SELECT * FROM diagnostics ORDER BY id DESC LIMIT ?')
+      .all(Math.max(1, Math.min(500, Number(limit) || 200)));
+    return rows.map((r) => ({
+      id: Number(r.id),
+      level: r.level,
+      category: r.category,
+      code: r.code,
+      summary: r.summary,
+      detail: r.detail_json ? JSON.parse(r.detail_json) : null,
+      created_at: r.created_at,
+    }));
+  }
+
+  // ---------------------------------------------------------------- search
+  /**
+   * Search a case's transcript segments, speakers, notes/bookmarks and evidence
+   * names. Case-insensitive substring match. Returns positioned hits so the UI
+   * can jump straight to the recording time.
+   */
+  searchCase(caseId, query, { limit = 200 } = {}) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!q) return { query: '', hits: [] };
+    const max = Math.max(1, Math.min(1000, Number(limit) || 200));
+    const hits = [];
+    const push = (hit) => {
+      if (hits.length < max) hits.push(hit);
+    };
+
+    const evidence = this.listEvidence(caseId);
+    const evById = new Map(evidence.map((e) => [e.evidence_id, e]));
+
+    for (const ev of evidence) {
+      if (String(ev.original_name || '').toLowerCase().includes(q)) {
+        push({ type: 'evidence', evidence_id: ev.evidence_id, evidence_name: ev.original_name, text: ev.original_name });
+      }
+    }
+
+    for (const ev of evidence) {
+      const t = this.getTranscript(caseId, ev.evidence_id);
+      if (!t) continue;
+      for (const s of this.getSegments(t.transcript_id)) {
+        if (String(s.text || '').toLowerCase().includes(q) || String(s.speaker || '').toLowerCase().includes(q)) {
+          push({
+            type: 'segment',
+            evidence_id: ev.evidence_id,
+            evidence_name: ev.original_name,
+            transcript_id: t.transcript_id,
+            segment_id: s.segment_id,
+            start: s.start,
+            end: s.end,
+            speaker: s.speaker,
+            status: s.status,
+            text: s.text,
+          });
+        }
+      }
+    }
+
+    for (const n of this.listNotes(caseId)) {
+      if (String(n.body || '').toLowerCase().includes(q) || String(n.category || '').toLowerCase().includes(q)) {
+        const ev = n.evidence_id ? evById.get(n.evidence_id) : null;
+        push({
+          type: n.kind === 'BOOKMARK' ? 'bookmark' : 'note',
+          note_id: n.note_id,
+          evidence_id: n.evidence_id,
+          evidence_name: ev ? ev.original_name : null,
+          at_seconds: n.at_seconds,
+          category: n.category,
+          text: n.body,
+        });
+      }
+    }
+
+    return { query: String(query), hits };
+  }
+
   stats() {
     const count = (sql) => Number(this.db.prepare(sql).get().n);
     return {
@@ -1256,4 +1676,5 @@ module.exports = {
   normalizeSegments,
   statusSetToRevisionState,
   SCHEMA_VERSION,
+  CASE_ASSIGNMENT_FIELDS,
 };
