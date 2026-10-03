@@ -217,6 +217,12 @@ security and license review, known limitations) is in
 [docs/VERIFICATION.md](docs/VERIFICATION.md) and
 [docs/FINAL_REPORT.md](docs/FINAL_REPORT.md).
 
+The forward-looking 56.12 product discovery and technical architecture audit —
+current-state audit, official scope analysis, practitioner findings, technology
+landscape, benchmark and red-team strategy, and a ranked opportunity matrix — is
+in [docs/56-12-PRODUCT-DISCOVERY.md](docs/56-12-PRODUCT-DISCOVERY.md). It is a
+research document: it approves no feature and implements none.
+
 | | |
 | --- | --- |
 | Status | COMPLETE WITH KNOWN LIMITATIONS |
