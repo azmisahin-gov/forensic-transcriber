@@ -39,6 +39,7 @@ const api = {
     list: (caseId) => ipcRenderer.invoke(IPC.EVIDENCE_LIST, caseId),
     remove: (evidenceId) => ipcRenderer.invoke(IPC.EVIDENCE_DELETE, evidenceId),
     reveal: (evidenceId) => ipcRenderer.invoke(IPC.EVIDENCE_REVEAL, evidenceId),
+    revealDataDir: () => ipcRenderer.invoke(IPC.APP_REVEAL_DATA_DIR),
     waveform: (evidenceId, buckets) => ipcRenderer.invoke(IPC.EVIDENCE_WAVEFORM, evidenceId, buckets),
     playbackUrl: (evidenceId) => `ft-media://evidence/${encodeURIComponent(evidenceId)}`,
   },
@@ -66,6 +67,7 @@ const api = {
   },
   exports: {
     run: (caseId, evidenceId, options) => ipcRenderer.invoke(IPC.EXPORT_RUN, caseId, evidenceId, options),
+    reveal: (caseId, evidenceId) => ipcRenderer.invoke(IPC.EXPORT_REVEAL, caseId, evidenceId),
   },
   dialog: {
     openFiles: () => ipcRenderer.invoke(IPC.DIALOG_OPEN_FILES),

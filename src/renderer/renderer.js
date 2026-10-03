@@ -112,6 +112,7 @@
       'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
       'btn-first-run-install', 'btn-first-run-models', 'btn-import',
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
+      'btn-open-exports', 'btn-open-datadir',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -450,6 +451,20 @@
       return;
     }
     renderCaseList();
+    updateStorageInfo();
+  }
+
+  /**
+   * The counts in the sidebar must reflect the live list, not a snapshot taken
+   * once at startup. Previously the header showed "0 cases · 0 files" while the
+   * list beside it already showed cases and files.
+   */
+  function updateStorageInfo() {
+    const el = $('#storage-info');
+    if (!el) return;
+    const caseCount = state.cases.length;
+    const fileCount = state.cases.reduce((n, c) => n + (Number(c.evidence_count) || 0), 0);
+    el.textContent = `${caseCount} case${caseCount === 1 ? '' : 's'} · ${fileCount} file${fileCount === 1 ? '' : 's'}`;
   }
 
   function renderCaseList() {
@@ -994,8 +1009,24 @@
         api.exports.run(state.caseRecord.case_id, state.activeEvidenceId, { formats })
       );
       toast(`Exported ${files.length} file(s) to the case exports folder.`, 'success');
+      // Keep the export folder one click away rather than a manual search.
+      const reveal = await confirmDialog(
+        'Export complete',
+        `${files.length} file(s) were written to the case exports folder. Open the folder now?`
+      );
+      if (reveal) await openExportsFolder();
     } catch (err) {
       toast(`Export failed: ${errText(err)}`, 'error');
+    }
+  }
+
+  async function openExportsFolder() {
+    if (!state.caseRecord) return;
+    try {
+      const dir = await call(api.exports.reveal(state.caseRecord.case_id));
+      toast(`Exports folder: ${dir}`);
+    } catch (err) {
+      toast(`Could not open the exports folder: ${errText(err)}`, 'error');
     }
   }
 
@@ -1037,13 +1068,12 @@
     });
 
     $('#btn-refresh-cases').addEventListener('click', refreshCases);
-    $('#btn-open-datadir').addEventListener('click', async () => {
+    bind('#btn-open-datadir', 'click', async () => {
       try {
-        const paths = await call(api.app.paths());
-        await call(api.dialog.openDirectory());
-        toast(`Data folder: ${paths.dataDir}`);
-      } catch {
-        /* ignore */
+        const dir = await call(api.evidence.revealDataDir());
+        toast(`Opened the data folder: ${dir}`);
+      } catch (err) {
+        toast(`Could not open the data folder: ${errText(err)}`, 'error');
       }
     });
 
@@ -1085,6 +1115,10 @@
     $('#btn-cancel').addEventListener('click', cancelTranscription);
     bind('#btn-save', 'click', saveTranscript);
     bind('#btn-export', 'click', openExportDialog);
+    bind('#btn-open-exports', 'click', (e) => {
+      e.preventDefault();
+      openExportsFolder();
+    });
     $('#btn-run-export').addEventListener('click', (e) => {
       e.preventDefault();
       $('#dialog-export').close();

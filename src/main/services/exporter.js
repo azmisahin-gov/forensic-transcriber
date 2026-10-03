@@ -33,7 +33,12 @@ function sha256Text(text) {
 async function runExport({ caseRecord, evidence, transcript, segments, language, modelId, engine, formats, outputDir, baseName }) {
   const dir = outputDir || path.join(caseRecord.case_dir, 'exports');
   fs.mkdirSync(dir, { recursive: true });
-  const stem = safeStem(baseName || (evidence && evidence.original_name) || caseRecord.case_id);
+  // Two recordings in one case can share a file name, so the evidence id is
+  // part of the export name. Without it, exporting the second recording would
+  // silently overwrite the first recording's export in the shared folder.
+  const evidenceStem = safeStem(baseName || (evidence && evidence.original_name) || caseRecord.case_id);
+  const evidenceId = evidence && evidence.evidence_id ? evidence.evidence_id : null;
+  const stem = evidenceId ? `${evidenceStem}__${evidenceId}` : evidenceStem;
   const ctx = { caseRecord, evidence, transcript, segments, language, modelId, engine };
   const written = [];
   for (const format of formats) {

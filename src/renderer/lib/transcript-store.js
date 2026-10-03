@@ -209,7 +209,7 @@
         words: firstWords,
       };
       const second = {
-        segment_id: `${seg.segment_id}-B`,
+        segment_id: this._uniqueId(`${seg.segment_id}-B`),
         start: at,
         end: seg.end,
         speaker: seg.speaker,
@@ -250,7 +250,7 @@
       const idx = this.indexOf(segmentId);
       const anchor = idx >= 0 ? this.segments[idx] : null;
       const seg = {
-        segment_id: `SEG-NEW-${Date.now().toString(36)}`,
+        segment_id: this._uniqueId(`SEG-NEW-${Date.now().toString(36)}`),
         start: start ?? (anchor ? anchor.end : 0),
         end: end ?? (anchor ? anchor.end + 1 : 1),
         speaker: speaker || (anchor ? anchor.speaker : 'SPEAKER_01'),
@@ -264,6 +264,21 @@
       this.segments.splice(i + 1, 0, seg);
       this._emit();
       return seg;
+    }
+
+    /**
+     * Make an id unique within this transcript. Split and insert derive ids from
+     * a base string; repeated operations on the same base would otherwise
+     * collide, which the database (transcript_id, segment_id) key would reject.
+     */
+    _uniqueId(base) {
+      let candidate = base;
+      let n = 1;
+      while (this.segments.some((s) => s.segment_id === candidate)) {
+        candidate = `${base}-${n}`;
+        n += 1;
+      }
+      return candidate;
     }
 
     toPayload() {
