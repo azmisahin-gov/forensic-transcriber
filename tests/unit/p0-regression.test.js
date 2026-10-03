@@ -240,30 +240,40 @@ test('a v1 archive (no revisions) still restores as a single revision', async ()
 
 // ------------------------------------------------------ P0-5 atomic evidence import
 
-test('a failed evidence copy leaves no row, no partial file and no temp file', async (t) => {
-  if (process.getuid && process.getuid() === 0) {
-    t.skip('running as root: directory permissions are not enforced');
-    return;
-  }
+test('a failed evidence copy leaves no row, no partial file and no temp file', async () => {
   const dir = tmp();
   const storage = new Storage(dir);
   const kase = storage.createCase({ title: 'Atomic import' });
   const src = path.join(dir, 'in.wav');
   fs.writeFileSync(src, 'payload');
-
   const originalDir = path.join(kase.case_dir, 'evidence', 'original');
-  fs.chmodSync(originalDir, 0o500); // read + execute only: the copy must fail
+
+  // Inject the failure at the copy call itself. A read-only directory does not
+  // stop the copy on Windows, so the failure must be enforced platform-
+  // independently. The injected copy writes a partial file first (as a crash
+  // during a real copy would) and then fails with an I/O error; importEvidence
+  // is still the real code path under test.
+  const realCopyFile = fs.promises.copyFile.bind(fs.promises);
+  let injected = false;
+  fs.promises.copyFile = async (from, to) => {
+    if (!injected) {
+      injected = true;
+      fs.writeFileSync(to, 'partial');
+      throw Object.assign(new Error('simulated I/O error during copy'), { code: 'EIO' });
+    }
+    return realCopyFile(from, to);
+  };
   try {
-    await assert.rejects(() => storage.importEvidence(kase.case_id, src, {}));
+    await assert.rejects(() => storage.importEvidence(kase.case_id, src, {}), /simulated I\/O error/);
   } finally {
-    fs.chmodSync(originalDir, 0o700);
+    fs.promises.copyFile = realCopyFile;
   }
 
   assert.equal(storage.listEvidence(kase.case_id).length, 0, 'no evidence row for a failed import');
   const leftovers = fs.readdirSync(originalDir);
   assert.deepEqual(leftovers, [], 'a failed copy must leave the destination directory empty');
 
-  // A subsequent import into the restored directory works normally.
+  // A subsequent import into the same directory works normally.
   const ev = await storage.importEvidence(kase.case_id, src, {});
   assert.ok(ev.evidence_id);
   assert.equal(storage.listEvidence(kase.case_id).length, 1);
