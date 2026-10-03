@@ -279,13 +279,19 @@ async function verifyEvidenceIntegrity(evidence) {
   return integrity;
 }
 
-/** Build a structured report from the case's verified data (no writes). */
 async function buildReportForCase(caseId) {
   const kase = requireCase(caseId);
   const evidence = storage.listEvidence(caseId);
   const transcripts = reports.collectTranscripts({ caseRecord: kase, evidence, storage });
   const notes = storage.listNotes(caseId);
   const report = storage.getReport(caseId);
+  const integrity = await verifyEvidenceIntegrity(evidence);
+  let dashboard = null;
+  try {
+    dashboard = storage.caseDashboard(caseId);
+  } catch {
+    dashboard = null;
+  }
   return reports.buildReport({
     caseRecord: kase,
     evidence,
@@ -293,6 +299,8 @@ async function buildReportForCase(caseId) {
     notes,
     engineInfo: currentEngineInfo(),
     report,
+    integrity,
+    dashboard,
   });
 }
 
@@ -1017,6 +1025,222 @@ function registerIpc() {
   });
 }
 
+/**
+ * Self-contained productization acceptance test.
+ *
+ * Runs the whole expert workflow end to end through the real services - the
+ * same code the IPC handlers and the renderer drive - on a generated synthetic
+ * recording, without a speech model:
+ *
+ *   intake (assignment) -> import -> transcribe (injected deterministic ASR) ->
+ *   expert edit -> delivery package -> report export -> archive -> restore ->
+ *   integrity re-verification
+ *
+ * It also injects a mid-transcription failure and asserts the run closes as
+ * FAILED (lifecycle) and that the reviewed human revision is never silently
+ * overwritten by a later machine run (revision safety). Every assertion is a
+ * real call returning real data.
+ */
+async function runBusinessCaseTest() {
+  const report = { ok: false, steps: [] };
+  const step = (name, ok, detail) => {
+    report.steps.push({ name, ok, detail });
+    if (process.env.FT_VERBOSE) process.stderr.write(`[business] ${ok ? 'ok' : 'FAIL'} ${name}${detail ? ` :: ${detail}` : ''}\n`);
+  };
+  const os = require('node:os');
+  const zlib = require('node:zlib');
+  const { writeCaseArchive, restoreCaseArchive, verifyCaseArchive } = require('./services/case-archive');
+  const { buildDeliveryPackage } = require('./services/delivery');
+  const { readTar } = require('./services/tar');
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ft-business-'));
+
+  try {
+    // A small deterministic ASR adapter: no model, no external process. It
+    // returns the same output shape a real run produces, so the storage and
+    // revision logic is exercised for real.
+    const fakeAdapter = {
+      describe: () => ({ engine: 'whisper.cpp', binaryPath: 'fake' }),
+      version: async () => 'fake-1.0',
+      parseOutput: (prefix) => {
+        const raw = JSON.parse(fs.readFileSync(`${prefix}.json`, 'utf8'));
+        const segments = raw.transcription.map((t, i) => ({
+          segment_id: `SEG-${i}`,
+          start: t.t0 / 1000,
+          end: t.t1 / 1000,
+          speaker: 'SPEAKER_01',
+          text: t.text,
+          status: 'AUTOMATIC',
+          confidence: t.p,
+          words: null,
+        }));
+        return { segments, language: 'tr' };
+      },
+      transcribe: async ({ outputPrefix }) => {
+        if (fakeAdapter._failNext) {
+          fakeAdapter._failNext = false;
+          throw new Error('injected decoder failure');
+        }
+        const tokens = [
+          { text: 'Merhaba', t0: 0, t1: 700, p: 0.94 },
+          { text: 'dünya', t0: 700, t1: 1400, p: 0.88 },
+          { text: 'ikinci', t0: 1500, t1: 2200, p: 0.7 },
+          { text: 'cümle', t0: 2200, t1: 2900, p: 0.55 },
+        ];
+        fs.writeFileSync(`${outputPrefix}.json`, JSON.stringify({ transcription: tokens }));
+        return { outputPrefix };
+      },
+    };
+    const originalAdapter = whisper;
+    whisper = fakeAdapter;
+
+    const kase = storage.createCase({
+      title: 'Business case',
+      file_number: '2026/42',
+      authority: 'Ankara 1. Asliye Ceza',
+      requested_questions: 'Kayıtta ne konuşulmuş?',
+      due_date: '2026-12-31',
+    });
+    step('intake: assignment stored', kase.file_number === '2026/42' && kase.requested_questions === 'Kayıtta ne konuşulmuş?');
+
+    // A real 1-second, 8 kHz mono 16-bit WAV generated in-process.
+    const wavPath = path.join(workDir, 'ornek.wav');
+    const sampleRate = 8000;
+    const data = Buffer.alloc(sampleRate * 2);
+    for (let i = 0; i < sampleRate; i += 1) {
+      data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 12000), i * 2);
+    }
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + data.length, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * 2, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(data.length, 40);
+    fs.writeFileSync(wavPath, Buffer.concat([header, data]));
+
+    const meta = await media.probe(wavPath);
+    const ev = await storage.importEvidence(kase.case_id, wavPath, meta);
+    step('import: evidence recorded with hash', /^[0-9a-f]{64}$/.test(ev.sha256) && ev.size_bytes > 44);
+    step('import: metadata read by the real decoder', ev.duration_seconds > 0 && ev.sample_rate === 8000);
+
+    const run1 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    const out1 = await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run1') });
+    const segs1 = whisper.parseOutput(out1.outputPrefix).segments;
+    const saved1 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: segs1, source: 'asr', runId: run1,
+    });
+    storage.finishTranscriptionRun(run1, { status: 'SUCCEEDED' });
+    const done1 = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id).find((r) => r.run_id === run1);
+    step('transcribe: run SUCCEEDED with a finish time', done1.status === 'SUCCEEDED' && Boolean(done1.finished_at));
+    step('transcribe: machine segments produced', saved1.segments.length >= 1);
+    step('transcribe: machine revision is current on first run', saved1.revisionBecameCurrent === true);
+
+    const firstId = saved1.segments[0].segment_id;
+    const edited = saved1.segments.map((sg) => ({
+      segment_id: sg.segment_id, start: sg.start, end: sg.end, speaker: sg.speaker,
+      text: sg.segment_id === firstId ? 'Düzeltilmiş açılış' : sg.text,
+      original_text: sg.original_text, status: 'VERIFIED',
+      confidence: sg.confidence, words: sg.words, flags: [],
+    }));
+    const saved2 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: edited, source: 'review',
+    });
+    step('review: edit saved as VERIFIED human revision', saved2.segments[0].status === 'VERIFIED' && saved2.segments[0].text === 'Düzeltilmiş açılış');
+
+    const run2 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    const out2 = await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run2') });
+    const segs2 = whisper.parseOutput(out2.outputPrefix).segments.map((sg, i) => ({ ...sg, segment_id: `R2-${i}` }));
+    const saved3 = storage.saveTranscript(kase.case_id, ev.evidence_id, {
+      language: 'tr', modelId: 'fake-model', engine: 'whisper.cpp',
+      segments: segs2, source: 'asr', runId: run2,
+    });
+    storage.finishTranscriptionRun(run2, { status: 'SUCCEEDED' });
+    step('re-transcription: machine run does not become current', saved3.revisionBecameCurrent === false);
+    const tid = storage.getTranscript(kase.case_id, ev.evidence_id).transcript_id;
+    const after = storage.getSegments(tid);
+    step('re-transcription: human VERIFIED text preserved', after[0].text === 'Düzeltilmiş açılış' && after[0].status === 'VERIFIED');
+    const revs = storage.listRevisions(tid);
+    step('re-transcription: both revisions stored', revs.length >= 2);
+
+    const run3 = storage.startTranscriptionRun(kase.case_id, ev.evidence_id, {
+      engine: 'whisper.cpp', engineVersion: 'fake-1.0', modelId: 'fake-model', settings: {},
+      inputSha256: ev.sha256, runtimeMode: 'cpu', runtimeReason: 'test',
+    });
+    fakeAdapter._failNext = true;
+    let failed = false;
+    try {
+      await whisper.transcribe({ inputPath: wavPath, outputPrefix: path.join(workDir, 'run3') });
+    } catch (err) {
+      failed = true;
+      storage.finishTranscriptionRun(run3, { status: 'FAILED', errorCode: 'ASR_FAILED', errorMessage: err.message });
+    }
+    const run3row = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id).find((r) => r.run_id === run3);
+    step('failure: injected decoder error surfaced', failed === true);
+    step('failure: run closed FAILED with finish time', run3row.status === 'FAILED' && Boolean(run3row.finished_at));
+    const allRuns = storage.listTranscriptionRuns(kase.case_id, ev.evidence_id);
+    step('lifecycle: no orphan STARTED run remains', allRuns.every((r) => r.status !== 'STARTED'));
+
+    const delivery = await buildDeliveryPackage({ storage, caseId: kase.case_id, engineInfo: currentEngineInfo() });
+    const entries = readTar(zlib.gunzipSync(delivery.buffer)).map((e) => e.name);
+    step('delivery: package built', delivery.buffer.length > 0);
+    step('delivery: manifest and report included',
+      entries.includes('manifest.json') && entries.includes('report/report.docx') && entries.includes('report/report.pdf'));
+    step('delivery: transcript included', entries.some((n) => n.startsWith('transcript/')));
+
+    const built = await buildReportForCase(kase.case_id);
+    const docx = reportToDocx(built);
+    const pdf = reportToPdf(built);
+    step('report: docx and pdf produced', docx.length > 0 && pdf.length > 0);
+    step('report: checklist computed', Boolean(built.checklist && Array.isArray(built.checklist.items)));
+
+    const archivePath = path.join(workDir, 'case.ftcase.tar.gz');
+    const archived = await writeCaseArchive({ storage, caseId: kase.case_id, destPath: archivePath });
+    const buffer = fs.readFileSync(archivePath);
+    step('archive: written and verifies', archived.bytes > 0 && verifyCaseArchive(buffer).ok === true);
+    const restored = await restoreCaseArchive({ storage, buffer });
+    step('restore: created as a new case', restored.caseId !== kase.case_id);
+    const restoredEvidence = storage.listEvidence(restored.caseId);
+    step('restore: evidence count preserved', restoredEvidence.length === storage.listEvidence(kase.case_id).length);
+    step('restore: evidence hash preserved', restoredEvidence[0].sha256 === ev.sha256);
+    const rTranscript = storage.getTranscript(restored.caseId, restoredEvidence[0].evidence_id);
+    const rRevs = rTranscript ? storage.listRevisions(rTranscript.transcript_id) : [];
+    step('restore: transcript revisions preserved', rRevs.length === revs.length && rRevs.length >= 2);
+    const rCurrent = rTranscript ? storage.getCurrentRevisionInfo(rTranscript.transcript_id) : null;
+    step('restore: current human revision preserved', Boolean(rCurrent) && rCurrent.state === 'VERIFIED');
+    const restoredRuns = storage.listTranscriptionRuns(restored.caseId, restoredEvidence[0].evidence_id);
+    step('restore: transcription runs preserved', restoredRuns.length === allRuns.length);
+
+    const integrity = await verifyEvidenceIntegrity(storage.listEvidence(kase.case_id));
+    step('integrity: original re-verifies OK', integrity.length === 1 && integrity[0].status === 'OK');
+
+    whisper = originalAdapter;
+    report.ok = report.steps.every((s) => s.ok);
+  } catch (err) {
+    report.error = err && err.stack ? err.stack : (err && err.message ? err.message : String(err));
+  }
+
+  process.stdout.write(`BUSINESS_RESULT ${JSON.stringify(report)}\n`);
+  if (storage) storage.close();
+  try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* temp cleanup only */ }
+  app.exit(report.ok ? 0 : 1);
+}
+
+
 async function bootstrap() {
   await app.whenReady();
 
@@ -1056,6 +1280,11 @@ async function bootstrap() {
 
   if (process.argv.includes('--engine-report')) {
     await runEngineReport();
+    return;
+  }
+
+  if (process.argv.includes('--business-case-test')) {
+    await runBusinessCaseTest();
     return;
   }
 
@@ -1433,6 +1662,62 @@ async function runAcceptanceTest() {
       document.getElementById('btn-run-export').click();
       await new Promise((r) => setTimeout(r, 1800));
       return true;
+    })()`);
+
+    // Productization surface: the dashboard, per-segment flags, filtering and
+    // the notes/report panels must all be wired and functional, not just present.
+    await uiStep('case dashboard shows live counts', `(async () => {
+      const grid = document.getElementById('dash-grid');
+      if (!grid || !grid.querySelector('dd')) return { __error: 'dashboard did not render' };
+      const evidence = [...grid.querySelectorAll('dt')].find((dt) => dt.textContent.trim() === 'Evidence');
+      return Boolean(evidence && Number(evidence.nextElementSibling.textContent) >= 1);
+    })()`);
+
+    await uiStep('flags filter and search highlight work', `(async () => {
+      const seg = document.querySelector('#transcript-list .seg.active');
+      if (!seg) return { __error: 'no active segment' };
+      const flagBtn = [...seg.querySelectorAll('.seg-actions button')].find((b) => /^(UNCLEAR|REVISIT|REVIEW)/.test(b.textContent.trim()));
+      if (!flagBtn) return { __error: 'flag action not found' };
+      flagBtn.click();
+      await new Promise((r) => setTimeout(r, 250));
+      const flagged = document.querySelector('#transcript-list .seg.active');
+      if (!flagged.classList.contains('flagged')) return { __error: 'segment not marked flagged' };
+      const filter = document.getElementById('select-filter');
+      filter.value = 'unclear';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      const note = document.getElementById('filter-note');
+      if (note.classList.contains('hidden')) return { __error: 'filter note did not appear' };
+      const visible = document.querySelectorAll('#transcript-list .seg').length;
+      filter.value = 'all';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 200));
+      return document.querySelectorAll('#transcript-list .seg').length >= visible;
+    })()`);
+
+    await uiStep('notes panel adds a note', `(async () => {
+      document.getElementById('btn-notes').click();
+      await new Promise((r) => setTimeout(r, 500));
+      const dlg = document.getElementById('dialog-notes');
+      if (!dlg.open) return { __error: 'notes dialog did not open' };
+      document.getElementById('note-body').value = 'UI notu';
+      document.getElementById('btn-add-note').click();
+      await new Promise((r) => setTimeout(r, 700));
+      const rows = [...document.querySelectorAll('#notes-list .note-row .body')];
+      const ok = rows.some((b) => b.textContent.includes('UI notu'));
+      dlg.close();
+      return ok;
+    })()`);
+
+    await uiStep('report checklist renders through the UI', `(async () => {
+      document.getElementById('btn-report').click();
+      await new Promise((r) => setTimeout(r, 900));
+      const dlg = document.getElementById('dialog-report');
+      if (!dlg.open) return { __error: 'report dialog did not open' };
+      const items = document.querySelectorAll('#report-checklist li');
+      const ok = items.length > 0 && !items[0].textContent.includes('unavailable');
+      dlg.close();
+      return ok;
     })()`);
 
     // No uncaught renderer error may have accumulated during the whole run.

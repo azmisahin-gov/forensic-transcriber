@@ -1,12 +1,15 @@
 'use strict';
 
-/* global FT_CONSTANTS, FT_FORMAT, FT_TRANSCRIPT_STORE, FT_AUDIO, FT_WAVEFORM */
+/* global FT_CONSTANTS, FT_FORMAT, FT_TRANSCRIPT_STORE, FT_AUDIO, FT_WAVEFORM, FT_SEARCH */
 (function () {
   const { SEGMENT_STATUS } = FT_CONSTANTS;
   const { formatClock, formatBytes, formatDuration, relativeTime } = FT_FORMAT;
   const { TranscriptStore } = FT_TRANSCRIPT_STORE;
   const { AudioController } = FT_AUDIO;
   const { drawWaveform, resamplePeaks, xToTime } = FT_WAVEFORM;
+  const { FILTERS, filterSegments, highlightParts } = FT_SEARCH;
+
+  const FLAG_OPTIONS = ['UNCLEAR', 'REVISIT', 'REVIEW'];
 
   const api = window.ft;
   const $ = (sel) => document.querySelector(sel);
@@ -30,6 +33,10 @@
     pollTimer: null,
     engineProbe: null,
     lastRunMode: null,
+    dashboard: null,
+    notes: [],
+    searchQuery: '',
+    filter: FILTERS.ALL,
   };
 
   // ---------------------------------------------------------------- utilities
@@ -113,6 +120,7 @@
       'btn-first-run-install', 'btn-first-run-models', 'btn-import',
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
+      'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -452,6 +460,7 @@
     }
     renderCaseList();
     updateStorageInfo();
+    if (state.caseRecord) await refreshDashboard();
   }
 
   /**
@@ -506,6 +515,7 @@
       state.activeEvidenceId = null;
       state.transcriptMeta = null;
       state.store = null;
+      state.searchQuery = '';
       $('#empty-state').classList.add('hidden');
       $('#case-view').classList.remove('hidden');
       $('#case-title').textContent = state.caseRecord.title;
@@ -516,8 +526,247 @@
       $('#btn-save').disabled = true;
       $('#btn-export').disabled = true;
       reportIntegrity(data.integrity, data.databaseHealth);
+      await refreshDashboard();
     } catch (err) {
       toast(`Could not open case: ${errText(err)}`, 'error');
+    }
+  }
+
+  // --------------------------------------------------------------- dashboard
+  async function refreshDashboard() {
+    if (!state.caseRecord) return;
+    try {
+      state.dashboard = await call(api.cases.dashboard(state.caseRecord.case_id));
+    } catch (err) {
+      state.dashboard = null;
+    }
+    renderDashboard();
+  }
+
+  function renderDashboard() {
+    const grid = $('#dash-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const d = state.dashboard;
+    $('#dash-updated').textContent = d ? `updated ${relativeTime(d.updated_at)}` : '';
+    if (!d) return;
+    const rows = [
+      ['Evidence', d.evidence, ''],
+      ['Transcribed', `${d.transcribed}/${d.evidence}`, d.transcribed === d.evidence ? 'ok' : ''],
+      ['Verified', d.verified, d.verified > 0 ? 'ok' : ''],
+      ['Reviewed', d.reviewed, ''],
+      ['Unclear', d.unclear_segments, d.unclear_segments > 0 ? 'warn' : ''],
+      ['Failed runs', d.failed_runs, d.failed_runs > 0 ? 'warn' : ''],
+      ['Notes', d.notes, ''],
+      ['Revisions', d.revisions, ''],
+      ['Missing fields', d.missing_assignment_fields, d.missing_assignment_fields > 0 ? 'warn' : ''],
+    ];
+    for (const [label, value, cls] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      if (cls) dd.className = cls;
+      dd.textContent = String(value);
+      wrap.append(dt, dd);
+      grid.appendChild(wrap);
+    }
+  }
+
+  // ------------------------------------------------------------- case intake
+  function openCaseEdit() {
+    if (!state.caseRecord) return;
+    const c = state.caseRecord;
+    $('#edit-case-title').value = c.title || '';
+    $('#edit-case-file-number').value = c.file_number || '';
+    $('#edit-case-authority').value = c.authority || '';
+    $('#edit-case-type').value = c.case_type || '';
+    $('#edit-case-assignment-date').value = c.assignment_date || '';
+    $('#edit-case-due').value = c.due_date || '';
+    $('#edit-case-scope').value = c.scope || '';
+    $('#edit-case-description').value = c.assignment_description || '';
+    $('#edit-case-questions').value = c.requested_questions || '';
+    $('#dialog-case-edit').showModal();
+  }
+
+  async function saveCaseEdit() {
+    if (!state.caseRecord) return;
+    const patch = {
+      title: $('#edit-case-title').value.trim() || state.caseRecord.title,
+      file_number: $('#edit-case-file-number').value.trim(),
+      authority: $('#edit-case-authority').value.trim(),
+      case_type: $('#edit-case-type').value.trim(),
+      assignment_date: $('#edit-case-assignment-date').value || null,
+      due_date: $('#edit-case-due').value || null,
+      scope: $('#edit-case-scope').value.trim(),
+      assignment_description: $('#edit-case-description').value.trim(),
+      requested_questions: $('#edit-case-questions').value.trim(),
+    };
+    try {
+      state.caseRecord = await call(api.cases.update(state.caseRecord.case_id, patch));
+      $('#case-title').textContent = state.caseRecord.title;
+      $('#case-subtitle').textContent = `${state.caseRecord.case_id} · ${state.caseRecord.notes || 'no notes'}`;
+      await refreshCases();
+      await refreshDashboard();
+      toast('Case assignment saved.', 'success');
+    } catch (err) {
+      toast(`Could not save case: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- notes
+  async function openNotes() {
+    if (!state.caseRecord) return;
+    try {
+      state.notes = await call(api.notes.list(state.caseRecord.case_id));
+    } catch (err) {
+      state.notes = [];
+    }
+    renderNotes();
+    $('#note-body').value = '';
+    $('#note-category').value = '';
+    $('#dialog-notes').showModal();
+  }
+
+  function renderNotes() {
+    const ul = $('#notes-list');
+    ul.innerHTML = '';
+    if (!state.notes.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = 'No notes for this case yet.';
+      ul.appendChild(li);
+      return;
+    }
+    for (const n of state.notes) {
+      const li = document.createElement('li');
+      li.className = 'note-row';
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = n.body;
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const stamp = document.createElement('span');
+      stamp.textContent = `${n.kind === 'BOOKMARK' ? 'Bookmark · ' : ''}${new Date(n.created_at).toLocaleString()}`;
+      meta.appendChild(stamp);
+      if (n.category) {
+        const cat = document.createElement('span');
+        cat.className = 'cat';
+        cat.textContent = n.category;
+        meta.appendChild(cat);
+      }
+      const spacer = document.createElement('span');
+      spacer.className = 'spacer';
+      meta.appendChild(spacer);
+      const del = actionButton('Delete', async () => {
+        try {
+          await call(api.notes.remove(n.note_id));
+          state.notes = state.notes.filter((x) => x.note_id !== n.note_id);
+          renderNotes();
+          await refreshDashboard();
+        } catch (err) {
+          toast(`Could not delete note: ${errText(err)}`, 'error');
+        }
+      });
+      meta.appendChild(del);
+      li.append(body, meta);
+      ul.appendChild(li);
+    }
+  }
+
+  async function addNote() {
+    if (!state.caseRecord) return;
+    const body = $('#note-body').value.trim();
+    if (!body) {
+      toast('Write something first.', 'error');
+      return;
+    }
+    try {
+      const note = await call(api.notes.create(state.caseRecord.case_id, {
+        body,
+        category: $('#note-category').value.trim() || null,
+        evidenceId: state.activeEvidenceId || null,
+        atSeconds: audio ? audio.currentTime : null,
+      }));
+      state.notes.push(note);
+      renderNotes();
+      $('#note-body').value = '';
+      $('#note-category').value = '';
+      await refreshDashboard();
+    } catch (err) {
+      toast(`Could not add note: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- report
+  async function openReport() {
+    if (!state.caseRecord) return;
+    $('#dialog-report').showModal();
+    await refreshChecklist();
+  }
+
+  async function refreshChecklist() {
+    const ul = $('#report-checklist');
+    ul.innerHTML = '';
+    try {
+      const checklist = await call(api.report.checklist(state.caseRecord.case_id));
+      for (const item of checklist.items) {
+        const li = document.createElement('li');
+        const stateEl = document.createElement('span');
+        const cls = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        stateEl.className = `state ${cls}`;
+        stateEl.textContent = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        const detail = document.createElement('span');
+        detail.className = 'detail';
+        detail.textContent = item.detail || '';
+        li.append(stateEl, label, detail);
+        ul.appendChild(li);
+      }
+    } catch (err) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = `Checklist unavailable: ${errText(err)}`;
+      ul.appendChild(li);
+    }
+  }
+
+  async function exportReport() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.report.export(state.caseRecord.case_id, {}));
+      toast(`Report written (${res.files.length} file(s)).`, 'success');
+      const open = await confirmDialog('Open exports folder?', 'Open the folder where the report files were written?');
+      if (open) await call(api.exports.reveal(state.caseRecord.case_id));
+    } catch (err) {
+      toast(`Report export failed: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- delivery
+  async function runDelivery() {
+    if (!state.caseRecord) return;
+    try {
+      const res = await call(api.delivery.build(state.caseRecord.case_id, {
+        includeEvidence: $('#chk-delivery-evidence').checked,
+      }));
+      if (res && res.canceled) return;
+      toast(`Delivery package written (${formatBytes(res.bytes)}).`, 'success');
+      await refreshDashboard();
+    } catch (err) {
+      toast(`Delivery package failed: ${errText(err)}`, 'error');
+    }
+  }
+
+  // ---------------------------------------------------------------- support
+  async function runSupportBundle() {
+    try {
+      const res = await call(api.diagnostics.bundle({}));
+      if (res && res.canceled) return;
+      toast(`Support bundle written (${formatBytes(res.bytes)}). It contains no transcript or audio.`, 'success');
+    } catch (err) {
+      toast(`Support bundle failed: ${errText(err)}`, 'error');
     }
   }
 
@@ -698,6 +947,7 @@
     list.innerHTML = '';
     const segs = state.store ? state.store.segments : [];
     const stats = $('#transcript-stats');
+    const visible = filterSegments(segs, state.filter, { placeholder: FT_CONSTANTS.UNCLEAR_PLACEHOLDER });
     if (!segs.length) {
       const p = document.createElement('p');
       p.className = 'muted small';
@@ -706,9 +956,16 @@
         : 'No transcript yet. Choose a model and press Transcribe.';
       list.appendChild(p);
     } else {
-      for (const seg of segs) list.appendChild(renderSegment(seg));
+      for (const seg of visible) list.appendChild(renderSegment(seg));
       const edited = segs.filter((s) => s.status !== SEGMENT_STATUS.AUTOMATIC).length;
       stats.textContent = `${segs.length} segments · ${edited} human-reviewed`;
+    }
+    const note = $('#filter-note');
+    if (state.filter !== FILTERS.ALL) {
+      note.classList.remove('hidden');
+      note.textContent = `Showing ${visible.length} of ${segs.length} segments (${state.filter}). Clear the filter to see all.`;
+    } else {
+      note.classList.add('hidden');
     }
     $('#btn-undo').disabled = !state.store || !state.store.canUndo;
     $('#btn-redo').disabled = !state.store || !state.store.canRedo;
@@ -717,8 +974,9 @@
   }
 
   function renderSegment(seg) {
+    const flagged = Array.isArray(seg.flags) && seg.flags.length > 0;
     const el = document.createElement('div');
-    el.className = `seg ${seg.status.toLowerCase()}${state.activeSegmentId === seg.segment_id ? ' active' : ''}`;
+    el.className = `seg ${seg.status.toLowerCase()}${flagged ? ' flagged' : ''}${state.activeSegmentId === seg.segment_id ? ' active' : ''}`;
     el.dataset.id = seg.segment_id;
 
     const head = document.createElement('div');
@@ -749,6 +1007,18 @@
     status.textContent = seg.status;
 
     head.append(startBtn, sep, endSpan, speaker, status);
+
+    if (flagged) {
+      const flags = document.createElement('span');
+      flags.className = 'flags';
+      for (const f of seg.flags) {
+        const tag = document.createElement('span');
+        tag.className = 'flag';
+        tag.textContent = f;
+        flags.appendChild(tag);
+      }
+      head.appendChild(flags);
+    }
 
     if (seg.confidence != null) {
       const conf = document.createElement('span');
@@ -786,12 +1056,31 @@
     } else {
       const body = document.createElement('div');
       body.className = 'seg-body';
-      body.textContent = seg.text;
+      const query = state.searchQuery.trim();
+      if (query) {
+        for (const part of highlightParts(seg.text, query)) {
+          if (part.match) {
+            const mark = document.createElement('mark');
+            mark.textContent = part.text;
+            body.appendChild(mark);
+          } else {
+            body.appendChild(document.createTextNode(part.text));
+          }
+        }
+      } else {
+        body.textContent = seg.text;
+      }
       el.appendChild(body);
     }
 
     const actions = document.createElement('div');
     actions.className = 'seg-actions';
+    const flagButtons = FLAG_OPTIONS.map((flag) => {
+      const active = Array.isArray(seg.flags) && seg.flags.includes(flag);
+      const btn = actionButton(active ? `${flag} ✓` : flag, () => state.store.toggleFlag(seg.segment_id, flag));
+      if (active) btn.classList.add('btn-primary');
+      return btn;
+    });
     actions.append(
       actionButton('Edit', () => {
         state.editingSegmentId = seg.segment_id;
@@ -803,6 +1092,7 @@
       actionButton('Mark reviewed', () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.REVIEWED)),
       actionButton('Mark verified', () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.VERIFIED)),
       actionButton('Speaker', () => cycleSpeaker(seg)),
+      ...flagButtons,
       actionButton('Delete', () => state.store.deleteSegment(seg.segment_id))
     );
     el.appendChild(actions);
@@ -1171,6 +1461,38 @@
     bind('#btn-export', 'click', openExportDialog);
     bind('#btn-archive-export', 'click', backUpCase);
     bind('#btn-archive-import', 'click', restoreCase);
+    bind('#btn-notes', 'click', openNotes);
+    bind('#btn-report', 'click', openReport);
+    bind('#btn-delivery', 'click', () => $('#dialog-delivery').showModal());
+    bind('#btn-support', 'click', () => $('#dialog-support').showModal());
+    bind('#btn-edit-case', 'click', openCaseEdit);
+    bind('#btn-add-note', 'click', addNote);
+    bind('#btn-report-build', 'click', refreshChecklist);
+    bind('#btn-report-export', 'click', exportReport);
+
+    $('#dialog-case-edit').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await saveCaseEdit();
+    });
+
+    $('#dialog-delivery').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await runDelivery();
+    });
+
+    $('#dialog-support').addEventListener('close', async (e) => {
+      if (e.target.returnValue !== 'default') return;
+      await runSupportBundle();
+    });
+
+    $('#select-filter').addEventListener('change', (e) => {
+      state.filter = e.target.value;
+      renderTranscript();
+    });
+    $('#search-input').addEventListener('input', (e) => {
+      state.searchQuery = e.target.value;
+      renderTranscript();
+    });
     bind('#btn-open-exports', 'click', (e) => {
       e.preventDefault();
       openExportsFolder();
@@ -1351,6 +1673,13 @@
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         moveSegment(1);
+      } else if (e.key === 'F2' && state.activeSegmentId) {
+        e.preventDefault();
+        state.editingSegmentId = state.activeSegmentId;
+        renderTranscript();
+      } else if (e.key === 'F3' && state.activeSegmentId) {
+        e.preventDefault();
+        state.store && state.store.toggleFlag(state.activeSegmentId, 'REVISIT');
       }
     });
   }

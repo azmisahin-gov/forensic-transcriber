@@ -77,12 +77,27 @@
             <div id="case-subtitle" class="muted small"></div>
           </div>
           <div class="case-header-actions">
+            <button id="btn-notes" class="btn" type="button">Notes…</button>
+            <button id="btn-report" class="btn" type="button">Report…</button>
+            <button id="btn-delivery" class="btn" type="button">Delivery package…</button>
+            <button id="btn-support" class="btn" type="button">Support bundle…</button>
             <button id="btn-archive-export" class="btn" type="button">Back up case…</button>
             <button id="btn-archive-import" class="btn" type="button">Restore case…</button>
             <button id="btn-save" class="btn btn-primary" type="button" disabled>Save</button>
             <button id="btn-export" class="btn" type="button" disabled>Export</button>
           </div>
         </div>
+
+        <section id="case-dashboard" class="case-dashboard" aria-label="Case dashboard">
+          <div class="dash-head">
+            <h2>Case overview</h2>
+            <span id="dash-updated" class="muted small"></span>
+          </div>
+          <dl id="dash-grid" class="dash-grid"></dl>
+          <div class="dash-actions">
+            <button id="btn-edit-case" class="btn btn-small" type="button">Edit assignment…</button>
+          </div>
+        </section>
 
         <div class="panes">
           <aside class="evidence-pane">
@@ -168,9 +183,20 @@
                   <h3>Transcript</h3>
                   <span id="transcript-stats" class="muted small"></span>
                   <span class="spacer"></span>
+                  <label class="field field-inline">
+                    <span>Filter</span>
+                    <select id="select-filter">
+                      <option value="all">All segments</option>
+                      <option value="unclear">Unclear / flagged</option>
+                      <option value="unreviewed">Unreviewed (machine)</option>
+                      <option value="low-confidence">Low confidence</option>
+                    </select>
+                  </label>
+                  <input id="search-input" class="input input-small" type="search" placeholder="Search this transcript…" />
                   <button id="btn-undo" class="btn btn-small" title="Undo (Ctrl+Z)" type="button" disabled>Undo</button>
                   <button id="btn-redo" class="btn btn-small" title="Redo (Ctrl+Shift+Z)" type="button" disabled>Redo</button>
                 </div>
+                <p id="filter-note" class="muted small hidden"></p>
                 <div id="transcript-list" class="transcript-list"></div>
               </section>
             </div>
@@ -291,6 +317,87 @@
     </form>
   </dialog>
 
+  <dialog id="dialog-case-edit" class="dialog">
+    <form method="dialog">
+      <h2>Case assignment</h2>
+      <label class="field"><span>Title</span><input id="edit-case-title" class="input" maxlength="200" /></label>
+      <label class="field"><span>File number (dosya no)</span><input id="edit-case-file-number" class="input" maxlength="120" /></label>
+      <label class="field"><span>Authority (mahkeme / merci)</span><input id="edit-case-authority" class="input" maxlength="200" /></label>
+      <label class="field"><span>Case type</span><input id="edit-case-type" class="input" maxlength="120" /></label>
+      <label class="field"><span>Assignment date</span><input id="edit-case-assignment-date" class="input" type="date" /></label>
+      <label class="field"><span>Due date</span><input id="edit-case-due" class="input" type="date" /></label>
+      <label class="field"><span>Scope</span><input id="edit-case-scope" class="input" maxlength="300" /></label>
+      <label class="field"><span>Assignment description</span><textarea id="edit-case-description" class="input" rows="2"></textarea></label>
+      <label class="field"><span>Requested questions</span><textarea id="edit-case-questions" class="input" rows="3"></textarea></label>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-save-case" value="default" class="btn btn-primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-notes" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>Case notes</h2>
+      <p class="muted small">Notes are stored inside this case only. They are not uploaded anywhere.</p>
+      <ul id="notes-list" class="notes-list"></ul>
+      <label class="field"><span>New note</span><textarea id="note-body" class="input" rows="2" placeholder="Observation about this recording…"></textarea></label>
+      <label class="field"><span>Category (optional)</span><input id="note-category" class="input" maxlength="60" /></label>
+      <menu>
+        <button value="cancel" class="btn">Close</button>
+        <button id="btn-add-note" value="default" class="btn btn-primary">Add note</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-report" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>Report</h2>
+      <p class="muted small">
+        A technical work product. It contains machine output and expert-reviewed text with the
+        revision recorded; it is not a legal opinion.
+      </p>
+      <div class="update-actions">
+        <button id="btn-report-build" class="btn btn-small" type="button">Refresh checklist</button>
+        <button id="btn-report-export" class="btn btn-small btn-primary" type="button">Export report…</button>
+      </div>
+      <h3>Delivery-readiness checklist</h3>
+      <ul id="report-checklist" class="checklist"></ul>
+      <menu>
+        <button value="cancel" class="btn">Close</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-delivery" class="dialog">
+    <form method="dialog">
+      <h2>Delivery package</h2>
+      <p class="muted small">
+        One file containing the report, transcripts, technical metadata and hashes, so the
+        receiver can verify what was delivered.
+      </p>
+      <label class="field field-inline"><input type="checkbox" id="chk-delivery-evidence" /><span>Include evidence copies (large)</span></label>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-run-delivery" value="default" class="btn btn-primary">Create package…</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-support" class="dialog">
+    <form method="dialog">
+      <h2>Support bundle</h2>
+      <p class="muted small">
+        A technical, redacted bundle (versions, engine/runtime selection, diagnostics and recent
+        log). It contains no transcript text, no audio and no evidence.
+      </p>
+      <menu>
+        <button value="cancel" class="btn">Cancel</button>
+        <button id="btn-run-support" value="default" class="btn btn-primary">Save bundle…</button>
+      </menu>
+    </form>
+  </dialog>
+
   <!-- Renderer dependency order. Each module defines one global and depends on
        the ones above it. shared/constants.js must load first: the transcript
        store reads FT_CONSTANTS at load time, and renderer.js uses it directly.
@@ -299,12 +406,16 @@
          FT_TRANSCRIPT_STORE -> lib/transcript-store.js (needs FT_CONSTANTS)
          FT_AUDIO          -> lib/audio.js         (no dependencies)
          FT_WAVEFORM       -> lib/waveform.js      (no dependencies)
+         FT_SEARCH         -> lib/search.js        (no dependencies)
+         FT_SHORTCUTS      -> lib/shortcuts.js     (no dependencies)
          (no global)       -> renderer.js          (needs all of the above) -->
   <script src="../shared/constants.js"></script>
   <script src="lib/format.js"></script>
   <script src="lib/transcript-store.js"></script>
   <script src="lib/audio.js"></script>
   <script src="lib/waveform.js"></script>
+  <script src="lib/search.js"></script>
+  <script src="lib/shortcuts.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
