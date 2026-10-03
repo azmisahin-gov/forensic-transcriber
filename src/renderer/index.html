@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app" class="app" aria-hidden="true">
+  <div id="app" class="app booting">
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true">FT</span>
@@ -21,6 +21,7 @@
       <div class="topbar-actions">
         <span id="model-badge" class="badge badge-muted">Checking model…</span>
         <span id="update-badge" class="badge badge-muted hidden"></span>
+        <span id="app-version" class="muted small mono" title="Application version"></span>
         <button id="btn-update" class="btn btn-ghost hidden" type="button">Update</button>
         <button id="btn-about" class="btn btn-ghost" type="button">About</button>
         <button id="btn-models" class="btn btn-ghost" type="button">Models</button>
@@ -125,7 +126,6 @@
                   </label>
                   <button id="btn-transcribe" class="btn btn-primary" type="button">Transcribe</button>
                   <button id="btn-cancel" class="btn btn-danger hidden" type="button">Cancel</button>
-                  <button id="btn-check-engine" class="btn btn-small" type="button">Check engine</button>
                 </div>
                 <p id="engine-status" class="engine-status small muted"></p>
                 <div id="progress-wrap" class="progress-wrap hidden">
@@ -207,6 +207,9 @@
     <form method="dialog">
       <h2>About &amp; updates</h2>
       <dl class="about-grid" id="about-info"></dl>
+      <div class="update-actions">
+        <button id="btn-diagnostics" class="btn btn-small" type="button">Diagnostics…</button>
+      </div>
 
       <h3>Application updates</h3>
       <p class="muted small">
@@ -229,6 +232,24 @@
         </div>
       </div>
 
+      <menu>
+        <button value="cancel" class="btn">Close</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-diagnostics" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2>Diagnostics</h2>
+      <p class="muted small">
+        Technical details about the transcription engine. This is diagnostic information for
+        troubleshooting; it is not part of the transcription workflow.
+      </p>
+      <div class="update-actions">
+        <button id="btn-check-engine" class="btn btn-small" type="button">Check engine</button>
+      </div>
+      <p id="diagnostics-engine-status" class="engine-status small muted">Not checked yet.</p>
+      <dl class="about-grid" id="diagnostics-info"></dl>
       <menu>
         <button value="cancel" class="btn">Close</button>
       </menu>
@@ -263,6 +284,16 @@
     </form>
   </dialog>
 
+  <!-- Renderer dependency order. Each module defines one global and depends on
+       the ones above it. shared/constants.js must load first: the transcript
+       store reads FT_CONSTANTS at load time, and renderer.js uses it directly.
+         FT_CONSTANTS      -> shared/constants.js
+         FT_FORMAT         -> lib/format.js        (no dependencies)
+         FT_TRANSCRIPT_STORE -> lib/transcript-store.js (needs FT_CONSTANTS)
+         FT_AUDIO          -> lib/audio.js         (no dependencies)
+         FT_WAVEFORM       -> lib/waveform.js      (no dependencies)
+         (no global)       -> renderer.js          (needs all of the above) -->
+  <script src="../shared/constants.js"></script>
   <script src="lib/format.js"></script>
   <script src="lib/transcript-store.js"></script>
   <script src="lib/audio.js"></script>

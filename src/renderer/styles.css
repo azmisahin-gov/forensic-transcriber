@@ -43,6 +43,10 @@ html, body {
   height: 100vh;
 }
 
+/* The workspace is hidden while the renderer boots. This is a visual hide, not
+   aria-hidden, so focusable controls are never blocked from receiving focus. */
+.app.booting { visibility: hidden; }
+
 /* Top bar */
 .topbar {
   grid-area: topbar;

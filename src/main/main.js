@@ -137,6 +137,20 @@ function createWindow() {
       if (/^https?:/.test(url)) shell.openExternal(url);
     }
   });
+  // Surface renderer console errors so a crashed renderer is observable rather
+  // than silent. The startup test reads window.__FT_CONSOLE_ERRORS__.
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    // Electron's level 3 is an error.
+    if (level >= 3) {
+      const entry = `${sourceId}:${line} ${message}`;
+      if (logger) logger.error('renderer console error', { entry });
+      mainWindow.webContents
+        .executeJavaScript(
+          `(window.__FT_CONSOLE_ERRORS__ = window.__FT_CONSOLE_ERRORS__ || []).push(${JSON.stringify(entry)})`
+        )
+        .catch(() => {});
+    }
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -639,9 +653,33 @@ async function bootstrap() {
 }
 
 /**
+ * Poll the renderer's boot signal until it reports success, failure, or the
+ * timeout elapses. Returns the state object, or null when nothing was reported
+ * (for example the renderer threw before installing the error handler).
+ */
+async function waitForRendererBoot(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    try {
+      const state = await mainWindow.webContents.executeJavaScript('window.__FT_RENDERER_STATE__ || null');
+      if (state) {
+        last = state;
+        if (state.booted || state.failed) return state;
+      }
+    } catch {
+      /* renderer not ready yet */
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return last;
+}
+
+/**
  * Headless self-test used by the release verification script. It boots the real
  * application (database, media scheme, IPC, renderer) and asserts the pieces
- * the acceptance test depends on are present. Exits non-zero on failure.
+ * the acceptance test depends on are present, including that the renderer
+ * script itself started without a fatal error. Exits non-zero on failure.
  */
 async function runSmokeTest() {
   const report = { ok: false, steps: [] };
@@ -660,6 +698,32 @@ async function runSmokeTest() {
       });
     });
     step('window loaded', true);
+
+    // Renderer startup gate. This is the check that would have caught the
+    // FT_CONSTANTS load-order crash: the preload API can answer calls even when
+    // the renderer script itself has thrown, so we assert the renderer's own
+    // boot signal, its dependency globals and its control wiring.
+    // init() is asynchronous, so poll until the renderer reports it booted.
+    const rendererState = await waitForRendererBoot(15000);
+    step('renderer booted without a fatal error', Boolean(rendererState && rendererState.booted === true),
+      rendererState && rendererState.error ? rendererState.error : (rendererState ? 'booted' : 'no boot signal'));
+    if (rendererState && rendererState.booted) {
+      step('renderer dependency globals defined',
+        Array.isArray(rendererState.missingGlobals) && rendererState.missingGlobals.length === 0,
+        `missing: ${(rendererState.missingGlobals || []).join(', ') || 'none'}`);
+      step('renderer primary controls wired',
+        rendererState.unwiredControlCount === 0,
+        `unwired: ${rendererState.unwiredControlCount}`);
+      step('renderer reports an application version',
+        typeof rendererState.version === 'string' && /^\d+\.\d+\.\d+/.test(rendererState.version),
+        String(rendererState.version));
+    }
+
+    // No uncaught exception may remain in the renderer console at startup.
+    const consoleErrors = await mainWindow.webContents.executeJavaScript(
+      'Array.isArray(window.__FT_CONSOLE_ERRORS__) ? window.__FT_CONSOLE_ERRORS__ : []'
+    );
+    step('no uncaught renderer errors', consoleErrors.length === 0, consoleErrors.join(' | '));
 
     const apiPresent = await mainWindow.webContents.executeJavaScript(
       'Boolean(window.ft && window.ft.app && window.ft.transcribe && window.ft.exports)'
@@ -744,6 +808,21 @@ async function runAcceptanceTest() {
     step('fresh launch', true);
 
     const js = (code) => mainWindow.webContents.executeJavaScript(code, true);
+    // UI steps must never abort the whole run: capture the error and report it.
+    const uiStep = async (name, code) => {
+      try {
+        const ok = await js(`(async () => { try { return await (${code}); } catch (e) { return { __error: String(e && e.message || e) }; } })()`);
+        if (ok && ok.__error) {
+          step(name, false, ok.__error);
+          return false;
+        }
+        step(name, ok === true, ok === true ? '' : String(ok));
+        return ok === true;
+      } catch (err) {
+        step(name, false, err && err.message ? err.message : String(err));
+        return false;
+      }
+    };
 
     const created = await js(`window.ft.cases.create({ title: 'Acceptance run', notes: 'auto' })`);
     step('create case', created.ok === true);
@@ -812,6 +891,115 @@ async function runAcceptanceTest() {
     const jsonPath = exported.data.find((f) => f.format === 'json').path;
     const json = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
     step('export json matches stored transcript', json.segments.length === reloadedSegments.length);
+
+    // ---- UI-driven verification -------------------------------------------
+    // Everything above went through the IPC surface. These steps drive the real
+    // renderer DOM, so a broken renderer (the v0.1.1 FT_CONSTANTS crash) or an
+    // unwired button fails the acceptance test instead of passing silently.
+    // Each step is wrapped so a failure reports its cause instead of aborting.
+    await uiStep('version visible in UI', `(() => {
+      const el = document.getElementById('app-version');
+      return Boolean(el && /^v\\d+\\.\\d+\\.\\d+/.test(el.textContent.trim()));
+    })()`);
+
+    await uiStep('case visible in sidebar', `(() => {
+      const items = [...document.querySelectorAll('#case-list .case-item .title')];
+      return items.some((t) => t.textContent.trim() === 'Acceptance run');
+    })()`);
+
+    // The real flow is: open the case, then select the imported recording,
+    // which is what loads the transcript into the review workspace.
+    await uiStep('case opens through the UI', `(async () => {
+      const items = [...document.querySelectorAll('#case-list .case-item')];
+      const target = items.find((li) => li.querySelector('.title').textContent.trim() === 'Acceptance run');
+      if (!target) return { __error: 'case not found in the sidebar' };
+      target.click();
+      await new Promise((r) => setTimeout(r, 600));
+      const ev = document.querySelector('#evidence-list .evidence-item');
+      if (!ev) return { __error: 'imported evidence not listed in the case' };
+      ev.click();
+      await new Promise((r) => setTimeout(r, 1200));
+      return document.querySelectorAll('#transcript-list .seg').length >= 1;
+    })()`);
+
+    await uiStep('clicking a segment selects it', `(async () => {
+      const seg = document.querySelector('#transcript-list .seg');
+      if (!seg) return { __error: 'no transcript segments rendered' };
+      seg.click();
+      await new Promise((r) => setTimeout(r, 250));
+      return Boolean(document.querySelector('#transcript-list .seg.active'));
+    })()`);
+
+    await uiStep('editing through the UI marks the segment EDITED', `(async () => {
+      const seg = document.querySelector('#transcript-list .seg.active');
+      const editBtn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Edit');
+      if (!editBtn) return { __error: 'Edit action not found' };
+      editBtn.click();
+      await new Promise((r) => setTimeout(r, 200));
+      const ta = document.querySelector('#transcript-list .seg.active textarea.seg-edit');
+      if (!ta) return { __error: 'edit textarea did not open' };
+      ta.value = 'UI düzenlemesi';
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 300));
+      const after = document.querySelector('#transcript-list .seg.active');
+      return after.classList.contains('edited')
+        && after.querySelector('.seg-body').textContent.includes('UI düzenlemesi');
+    })()`);
+
+    await uiStep('speaker can be changed through the UI', `(async () => {
+      const before = document.querySelector('#transcript-list .seg.active .speaker').textContent.trim();
+      const seg = document.querySelector('#transcript-list .seg.active');
+      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim() === 'Speaker');
+      if (!btn) return { __error: 'Speaker action not found' };
+      btn.click();
+      await new Promise((r) => setTimeout(r, 250));
+      const after = document.querySelector('#transcript-list .seg.active .speaker').textContent.trim();
+      return after !== before;
+    })()`);
+
+    await uiStep('split through the UI adds a segment', `(async () => {
+      const before = document.querySelectorAll('#transcript-list .seg').length;
+      const seg = document.querySelector('#transcript-list .seg.active');
+      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Split'));
+      if (!btn) return { __error: 'Split action not found' };
+      btn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      return document.querySelectorAll('#transcript-list .seg').length > before;
+    })()`);
+
+    await uiStep('merge through the UI removes a segment', `(async () => {
+      const before = document.querySelectorAll('#transcript-list .seg').length;
+      const seg = document.querySelector('#transcript-list .seg.active');
+      const btn = [...seg.querySelectorAll('.seg-actions button')].find((b) => b.textContent.trim().startsWith('Merge'));
+      if (!btn) return { __error: 'Merge action not found' };
+      btn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      return document.querySelectorAll('#transcript-list .seg').length < before;
+    })()`);
+
+    // Save must actually persist the UI edit: the button enables while dirty and
+    // disables once the store is clean.
+    await uiStep('save through the UI persists the edit', `(async () => {
+      const btn = document.getElementById('btn-save');
+      const wasEnabled = btn.disabled === false;
+      btn.click();
+      await new Promise((r) => setTimeout(r, 900));
+      return wasEnabled && btn.disabled === true;
+    })()`);
+
+    await uiStep('export through the UI writes files', `(async () => {
+      document.getElementById('btn-export').click();
+      await new Promise((r) => setTimeout(r, 200));
+      const dlg = document.getElementById('dialog-export');
+      if (!dlg.open) return { __error: 'export dialog did not open' };
+      document.getElementById('btn-run-export').click();
+      await new Promise((r) => setTimeout(r, 1800));
+      return true;
+    })()`);
+
+    // No uncaught renderer error may have accumulated during the whole run.
+    const uiErrors = await js('Array.isArray(window.__FT_CONSOLE_ERRORS__) ? window.__FT_CONSOLE_ERRORS__ : []');
+    step('no renderer errors after the UI workflow', uiErrors.length === 0, uiErrors.join(' | '));
 
     report.ok = report.steps.every((s) => s.ok);
   } catch (err) {

@@ -11,9 +11,20 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(require('../../shared/constants'));
   } else {
+    // Loaded as a plain browser script: FT_CONSTANTS must already be defined.
+    // Fail with an explicit message rather than a cryptic destructuring error,
+    // so a wrong <script> order is obvious instead of silent.
+    if (!root.FT_CONSTANTS) {
+      throw new Error(
+        'transcript-store.js requires FT_CONSTANTS. Load ../shared/constants.js before lib/transcript-store.js.'
+      );
+    }
     root.FT_TRANSCRIPT_STORE = factory(root.FT_CONSTANTS);
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (constants) {
+  if (!constants || !constants.SEGMENT_STATUS) {
+    throw new Error('transcript-store.js: constants module did not provide SEGMENT_STATUS.');
+  }
   const { SEGMENT_STATUS, UNCLEAR_PLACEHOLDER } = constants;
   const MAX_HISTORY = 200;
 
