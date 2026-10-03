@@ -113,11 +113,53 @@ Editing never overwrites the automatic version irrecoverably (undo history keeps
 it) and every export reports the status per segment and the count of
 human-reviewed segments.
 
+## D8b — Transcript revisions are append-only; a new ASR run never displaces human work
+
+**Decision.** A transcript owns an append-only list of revisions (newest first
+in storage, one flagged current). Each revision records its state
+(`MACHINE | REVIEWED | EDITED | VERIFIED`), the run that produced it (if any) and
+its own segment snapshot. Saving human work (`source: 'review'` or any
+`REVIEWED`/`EDITED`/`VERIFIED` segment) appends a new revision and makes it
+current. Saving an ASR result appends a `MACHINE` revision; it becomes current
+**only if** the transcript has no human current revision (or the operator
+explicitly promotes it). The live `segments` rows always mirror the current
+revision.
+
+**Why.** The 56.12 core principle is that machine output and expert output must
+not overwrite each other. Re-transcribing an evidence item used to overwrite the
+reviewed transcript in place; with revisions, run 2 produces a separate readable
+revision while the verified human text stays current until the operator chooses
+otherwise.
+
 ## D9 — Diarization is optional and never identifies people
 
 **Decision.** MVP ships manual speaker labels (`SPEAKER_01`, `SPEAKER_02`, …)
 and free-form custom labels. Automatic diarization is a documented roadmap item,
 must degrade gracefully, and may only ever emit `SPEAKER_NN` — never a name.
+
+## D9b — Multi-audio-stream containers: first stream, made visible
+
+**Decision.** The decode pipeline selects audio stream order 0 (`-map 0:a:0`) by
+default and accepts an explicit `audioStreamOrder`. `probe()` reports every audio
+stream and the selected order, and the stream count is stored on the evidence
+row. A file with more than one audio stream is therefore visible in the case
+rather than silently transcribed from an unstated track.
+
+**Why.** `-map 0:a:0` is a deliberate, documented choice, but a silent choice
+for a multi-track recording risks a transcript from the wrong track. Keeping the
+default and surfacing the fact is the minimum safe change; selecting among
+streams in the UI remains a roadmap item.
+
+## D9c — Waveform is binary-safe and memory-bounded
+
+**Decision.** The waveform pipeline reads FFmpeg's raw `s16le` PCM output as
+bytes and decimates it incrementally; it never round-trips PCM through a UTF-8
+string. Memory is bounded by the peak-bucket count, not the recording length.
+
+**Why.** Decoding binary output with `Buffer.from(stdout, 'binary')` corrupts
+samples that are not valid UTF-8, and buffering the whole decoded stream scales
+with the recording length. Both are avoided for a visual aid that must still be
+correct and must not spike memory on multi-hour recordings.
 
 ## D10 — Repository layout
 

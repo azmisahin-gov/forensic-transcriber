@@ -1,8 +1,67 @@
 # Project state
 
-CURRENT_PHASE: P11 — release lifecycle
-CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
+CURRENT_PHASE: P12 — trust/revision hardening
+CURRENT_STATUS: IN PROGRESS — code and tests complete in this environment; packaged/Windows verification outstanding
 LAST_UPDATED: 2026-10-03
+
+## P12 — trust/revision hardening (unreleased)
+
+Scope: fix the real P0 transcript state/provenance/data-integrity issues without
+a rewrite. No new features.
+
+Implemented:
+
+- **P0-1 run lifecycle.** `runId` is declared before the `try` in the transcribe
+  handler; the `catch` always closes an opened run and can no longer raise a
+  second exception that masks the original error. Runs end `SUCCEEDED`, `FAILED`
+  or `CANCELLED` with `finished_at` set.
+- **P0-2/P0-3 transcript revisions.** Append-only `transcript_revisions`
+  (schema_version 4), one current revision, run → revision link, machine vs.
+  human state. A new ASR run appends a `MACHINE` revision and does not displace a
+  current human revision unless the operator promotes it.
+- **P0-4 archive provenance.** Archive v2 carries all revisions; restore
+  re-creates runs and revisions with explicit `old id → new id` mapping and
+  re-links revisions to runs. v1 archives still restore.
+- **P0-5 atomic evidence import.** temp → hash/size verify → atomic rename →
+  DB insert; failure removes the temp file and leaves no row.
+- **P0-6 fail-closed migration backup.** A failed pre-migration backup aborts the
+  migration with `MIGRATION_BACKUP_FAILED`; the database is left untouched.
+- **P0-7/P0-8 waveform.** Binary-safe (no UTF-8 round-trip) and memory-bounded
+  (incremental decimation).
+- **P0-9 multi-audio-stream.** `probe()` reports every stream and the selected
+  order; `toAsrWav()` accepts an explicit order; the stream count is stored on
+  evidence.
+- **Export linkage.** JSON/TXT/HTML record the source `transcript_revision`.
+
+### Verified in this environment (P12)
+
+- `npm test` → 188 tests, 183 pass, 5 skipped, 0 fail (was 169/164/5/0).
+- `npm run lint` → Lint OK — 55 files.
+- `node scripts/security-check.js` → 0 critical findings.
+- New regression files: `tests/unit/p0-revision-lifecycle.test.js` (7 tests) and
+  `tests/unit/p0-regression.test.js` (12 tests), all passing. These exercise real
+  Storage/MediaService/archive code, not mocks; FFmpeg-dependent cases were run
+  with FFmpeg 7.1.5 present.
+- `npm run verify:release` → 6/8 gates; the two failures are environment gates
+  (integration tests need `whisper-cli` + model, packaged app tests need a
+  packaged build), not code failures.
+
+### Not verified in this environment (P12)
+
+- **Windows:** no Windows runner here. SQLite migration, atomic file operations
+  and path handling are covered by unit tests on Linux only; Windows CI must
+  confirm them.
+- **Packaged app / acceptance self-test:** `--acceptance-test` gained P0
+  re-transcription and run-lifecycle steps, but the packaged binary requires
+  `whisper-cli` and a model, which are not present here → **NOT VERIFIED**.
+- **Live re-transcription with a real whisper.cpp model:** the revision and
+  lifecycle invariants are proven with real storage code and real FFmpeg audio,
+  but the run was not driven with a loaded model.
+- **GPU (`GPU capable` / `GPU selected` / `GPU actually used`):** not verified on
+  target NVIDIA hardware. No GPU claim is made.
+- **Long-recording memory (1/4/8 h):** the waveform path is now O(buckets) by
+  construction and tested for bounded output, but no multi-hour recording was
+  measured here.
 
 ## Latest release: v0.1.4
 

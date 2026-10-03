@@ -20,9 +20,18 @@ Every result below comes from a command actually run in the build environment on
 
 Command: `node --test tests/unit/*.test.js`
 
-Result: **42 passed, 0 failed.** Covers the transcript store (edit/split/merge,
-undo/redo, status rules, the "never invent words" placeholder), exports (SRT time
-formatting, JSON schema and status distinction, HTML escaping and
+Result (2026-10-03, P12 hardening): **157 passed, 0 failed.**
+
+The P12 hardening added `tests/unit/p0-revision-lifecycle.test.js` (run
+lifecycle; revision non-destruction) and `tests/unit/p0-regression.test.js`
+(real re-transcription with distinct run ids, archive provenance, atomic
+evidence import, fail-closed migration backup, binary-safe waveform on known
+PCM, multi-audio-stream policy). Both run real Storage/MediaService/archive
+code, not mocks.
+
+Earlier result: 42 passed, 0 failed. Covers the transcript store (edit/split/
+merge, undo/redo, status rules, the "never invent words" placeholder), exports
+(SRT time formatting, JSON schema and status distinction, HTML escaping and
 self-containment), storage (case layout, hashing without modifying the original,
 name sanitisation, ordering validation, persistence across reopen, cascade
 delete), the runtime-probe parser, the runtime selector, and `version()`.

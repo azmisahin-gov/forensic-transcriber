@@ -5,6 +5,50 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Safe transcript revision semantics.** A transcript now keeps an
+  append-only `transcript_revisions` history (`transcript_revisions` table,
+  schema_version 4). A new ASR run records a new `MACHINE` revision linked to its
+  `transcription_runs` row; it does **not** overwrite a current human
+  `REVIEWED`/`EDITED`/`VERIFIED` revision. The operator can explicitly promote any
+  stored revision to current (`transcript:set-revision`). The live segment set is
+  always that of the current revision, and every revision remains readable.
+- **Export revision linkage.** JSON metadata and the TXT/HTML headers record the
+  `transcript_revision` (`revision_id`, `state`, `created_at`, `run_id`) the
+  export was rendered from.
+- **Multi-audio-stream visibility.** `probe()` reports every audio stream and the
+  selected order; `toAsrWav()` accepts an explicit `audioStreamOrder` (default
+  `0:a:0`). The stream count is stored on the evidence row and `>>1` is visible
+  rather than silently transcribed.
+- **Regression coverage** for run lifecycle, revision non-destruction, archive
+  provenance, atomic evidence import, fail-closed migration backup and
+  binary-safe waveform (`tests/unit/p0-revision-lifecycle.test.js`,
+  `tests/unit/p0-regression.test.js`).
+
+### Fixed
+
+- **Transcription run lifecycle.** `runId` is now declared before the `try`, so
+  the `catch` can always close an opened run. Every started run reaches
+  `SUCCEEDED`, `FAILED` or `CANCELLED` with `finished_at` set; no orphan
+  `STARTED` run remains. Closing a run is fault-tolerant and can no longer raise
+  a second exception that masks the original error.
+- **Binary-safe waveform.** The waveform no longer decodes FFmpeg's raw PCM
+  output to a UTF-8 string (`Buffer.from(stdout, 'binary')` was lossy). It is
+  consumed as bytes, decimated incrementally, so memory is bounded by the bucket
+  count rather than the recording length.
+- **Case archive provenance.** Archives carry all transcript revisions
+  (archive_version 1 and 2 accepted). Restore re-creates runs and revisions with
+  explicit `old id → new id` mapping, preserves run status, engine/version,
+  model/model hash, VAD, settings, runtime mode/reason and timestamps, and
+  re-links each revision to its run.
+
+### Changed
+
+- `schema_version` is now **4** (adds `evidence.audio_stream_count`).
+- Case archive format is now **version 2** (adds revisions); version 1 archives
+  still restore.
+
 ## [0.1.4] - 2026-10-03
 
 ### Added
