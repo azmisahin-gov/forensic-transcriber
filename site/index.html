@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Forensic Transcriber — 56.12 Local Transcription Workbench</title>
-  <meta name="description" content="Local-first desktop transcription workspace for 56.12 audio transcription workflows. No cloud, no account, no API key. Download for Windows." />
+  <title>Forensic Transcriber — 56.12 Ses Kayıtlarının Metin Haline Dönüştürülmesi</title>
+  <meta name="description" content="56.12 ses kayıtlarının metin haline dönüştürülmesi için yerel çalışan masaüstü çalışma istasyonu. Bulut yok, hesap yok, API anahtarı yok. Windows için indirin." />
   <link rel="stylesheet" href="styles.css" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234ea1ff'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='bold' text-anchor='middle' fill='%23061019'%3EFT%3C/text%3E%3C/svg%3E" />
 </head>
@@ -14,164 +14,472 @@
       <div class="brand">
         <span class="logo">FT</span>
         <span>FORENSIC TRANSCRIBER</span>
+        <span class="lang-toggle" role="group" aria-label="Dil / Language">
+          <button type="button" data-set-lang="tr" class="lang-btn active">TR</button>
+          <button type="button" data-set-lang="en" class="lang-btn">EN</button>
+        </span>
       </div>
-      <h1>Local transcription workbench<br /><span class="accent">for 56.12 audio transcription workflows</span></h1>
+      <h1>56.12 ses kayıtlarının metin haline dönüştürülmesi için<br /><span class="accent">yerel çalışan çalışma istasyonu</span></h1>
       <p class="lede">
-        Turn recordings into time-aligned transcripts, review them against the audio,
-        correct them, and export — entirely on your own machine.
+        Kayıtları zaman hizalı transkriptlere dönüştürün, sesle birlikte inceleyin,
+        düzeltin ve dışa aktarın — tamamen kendi bilgisayarınızda.
       </p>
-      <p class="nocloud">No cloud &nbsp;·&nbsp; No account &nbsp;·&nbsp; No API key &nbsp;·&nbsp; No telemetry</p>
+      <p class="nocloud">Bulut yok &nbsp;·&nbsp; Hesap yok &nbsp;·&nbsp; API anahtarı yok &nbsp;·&nbsp; Telemetri yok</p>
       <div class="cta">
-        <a id="download-btn" class="btn btn-primary" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download for Windows</a>
-        <a class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Releases</a>
-        <a class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber">Source code</a>
+        <a id="download-btn" class="btn btn-primary" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Windows için indir</a>
+        <a id="download-portable" class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Taşınabilir sürüm</a>
+        <a id="download-modelpack" class="btn" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Çevrimdışı model paketi</a>
       </div>
       <p class="fineprint">
-        The installer is not code-signed, so Windows SmartScreen may warn on first launch.
-        The standard installer does not include a speech model — install one from inside the app,
-        or use the offline model package.
+        Kurulum dosyası kod imzalı değildir; Windows SmartScreen ilk açılışta uyarabilir.
+        Standart kurulum bir konuşma modeli içermez — modeli uygulama içinden kurun veya
+        çevrimdışı model paketini kullanın.
       </p>
     </div>
   </header>
 
   <main>
-    <section class="wrap">
-      <h2>What is it?</h2>
-      <p>
-        Forensic Transcriber is a Windows desktop application for the expert area
-        <strong>56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi</strong>. It imports a
-        recording, records its technical metadata and a SHA-256, transcribes it locally with
-        <a href="https://github.com/ggml-org/whisper.cpp">whisper.cpp</a>, and gives you a review
-        workspace where every transcript line is tied to the exact moment in the audio.
-      </p>
-      <p class="notice">
-        This software is a technical transcription and review aid. It does not itself constitute a
-        forensic opinion, legal assessment, speaker identification, or authenticity determination.
-        It is <strong>not</strong> a 56.11 forensic audio/video analysis system.
-      </p>
-    </section>
+    <!-- ============================================================ TR ======= -->
+    <div data-lang-block="tr">
 
-    <section class="wrap">
-      <h2>Why local?</h2>
-      <ul class="cols">
-        <li><strong>Confidentiality.</strong> Recordings never leave the machine. Nothing is uploaded.</li>
-        <li><strong>No account.</strong> No login, no cloud, no API key, no telemetry.</li>
-        <li><strong>Works offline.</strong> The offline model package lets you install, launch and transcribe with no internet.</li>
-        <li><strong>Traceable.</strong> Import hash, metadata and an action history are recorded as software provenance features.</li>
-      </ul>
-    </section>
+      <section class="wrap">
+        <h2>Bu uygulama ne yapar?</h2>
+        <p>
+          Forensic Transcriber, adli bilişim uzman alanı
+          <strong>56.12 — Ses Kayıtlarının Metin Haline Dönüştürülmesi</strong> için geliştirilmiş
+          bir Windows masaüstü uygulamasıdır. Bir ses kaydını içe aktarır, teknik meta verisini ve
+          SHA-256 özetini kaydeder, kaydı <a href="https://github.com/ggml-org/whisper.cpp">whisper.cpp</a>
+          ile yerel olarak metne dönüştürür ve her satırın sesteki tam anına bağlandığı bir inceleme
+          çalışma alanı sunar.
+        </p>
+        <p class="notice">
+          Bu yazılım teknik bir transkripsiyon ve inceleme aracıdır. Kendi başına bir adli görüş,
+          hukuki değerlendirme, konuşmacı kimliklendirmesi veya orijinallik tespiti oluşturmaz.
+          <strong>56.11</strong> adli ses/görüntü inceleme sistemi <strong>değildir</strong>.
+        </p>
+      </section>
 
-    <section class="wrap">
-      <h2>How it works</h2>
-      <ol class="flow">
-        <li><span>1</span> New case</li>
-        <li><span>2</span> Import recording (picker or drag-and-drop)</li>
-        <li><span>3</span> Read metadata &amp; hash the original</li>
-        <li><span>4</span> Transcribe locally (GPU or CPU)</li>
-        <li><span>5</span> Click a line → play that exact audio region</li>
-        <li><span>6</span> Edit, split, merge, label speakers, verify</li>
-        <li><span>7</span> Export JSON / TXT / SRT / HTML</li>
-      </ol>
-    </section>
+      <section class="wrap">
+        <h2>Kimler için?</h2>
+        <ul class="cols">
+          <li><strong>Adli bilişim uzmanları</strong> — 56.12 kapsamında ses kaydını metne çeviren ve raporlayan uzmanlar.</li>
+          <li><strong>Bilirkişiler</strong> — kaydı sesle karşılaştırarak satır satır doğrulaması gereken kişiler.</li>
+          <li><strong>Kurum içi teknik ekipler</strong> — kayıtların makineden çıkmamasını gerektiren ortamlar.</li>
+        </ul>
+        <p>
+          Kapsam dışı: konuşmacı kimliklendirmesi, ses karşılaştırma, biyometrik ses tanıma,
+          deepfake/manipülasyon tespiti, duygu/yalan analizi, tehdit/suç sınıflandırması ve hukuki
+          yorum. Video dosyaları yalnızca ses kanalı için kabul edilir.
+        </p>
+      </section>
 
-    <section class="wrap">
-      <h2>Download &amp; install</h2>
-      <div class="cards">
-        <div class="card">
-          <h3>Standard installer</h3>
-          <p>Recommended. One installer. A speech model is installed separately from inside the app.</p>
-          <code>ForensicTranscriber-Setup-x64.exe</code>
+      <section class="wrap">
+        <h2>Neden yerel?</h2>
+        <ul class="cols">
+          <li><strong>Gizlilik.</strong> Kayıtlar bilgisayardan çıkmaz. Hiçbir şey yüklenmez.</li>
+          <li><strong>Hesap yok.</strong> Giriş yok, bulut yok, API anahtarı yok, telemetri yok.</li>
+          <li><strong>Çevrimdışı çalışır.</strong> Çevrimdışı model paketiyle internet olmadan da kurup transkripsiyon yapabilirsiniz.</li>
+          <li><strong>İzlenebilir.</strong> İçe aktarma özeti, meta veri ve işlem geçmişi yazılım köken/izlenebilirlik özelliği olarak kaydedilir.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Nasıl çalışır?</h2>
+        <ol class="flow">
+          <li><span>1</span> Dosya oluştur</li>
+          <li><span>2</span> Kaydı ekle (seçici veya sürükle-bırak)</li>
+          <li><span>3</span> Meta veriyi oku &amp; orijinali özetle</li>
+          <li><span>4</span> Yerel transkripsiyon (GPU veya CPU)</li>
+          <li><span>5</span> Satıra tıkla → o ses bölümünü dinle</li>
+          <li><span>6</span> Düzenle, böl, birleştir, konuşmacı etiketle, doğrula</li>
+          <li><span>7</span> Rapor, bulgular ve teslim paketini üret</li>
+        </ol>
+      </section>
+
+      <section class="wrap">
+        <h2>Kurulum</h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Standart kurulum</h3>
+            <p>Önerilir. Tek kurulum dosyası. Konuşma modeli uygulama içinden ayrıca kurulur.</p>
+            <code>ForensicTranscriber-Setup-x64.exe</code>
+            <p><a class="btn btn-small" id="download-btn-card" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Kurulum dosyasını indir</a></p>
+          </div>
+          <div class="card">
+            <h3>Taşınabilir sürüm</h3>
+            <p>Arşivi açıp çalıştırın. Kurulum adımı yok.</p>
+            <a class="btn btn-small" id="download-portable-card" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Taşınabilir zip indir</a>
+          </div>
+          <div class="card">
+            <h3>Çevrimdışı model paketi</h3>
+            <p>Varsayılan ASR modeli + VAD, özetli bir bildirim dosyasıyla. İnternetsiz makineler için.</p>
+            <a class="btn btn-small" id="download-modelpack-card" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Model paketini indir</a>
+          </div>
         </div>
-        <div class="card">
-          <h3>Portable</h3>
-          <p>Unzip and run. No installation step.</p>
-          <a class="btn btn-small" id="download-portable" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download portable zip</a>
+        <p>
+          Her sürüm tüm dosyalar için <code>SHA256SUMS.txt</code> yayımlar.
+          <a id="download-sha" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">SHA256SUMS.txt</a>
+          ile indirdiğiniz dosyanın özetini doğrulayabilirsiniz.
+        </p>
+        <p class="fineprint">
+          Python, Node.js, Rust, CMake, CUDA Toolkit veya FFmpeg kurmanız gerekmez. Bunlar yalnızca
+          uygulamayı kaynaktan derlerken gerekir.
+        </p>
+        <h3>İlk çalıştırma</h3>
+        <ol class="steps">
+          <li>Kurulum dosyasını indirin ve çalıştırın (SmartScreen uyarısı çıkabilir).</li>
+          <li>Uygulamayı açın.</li>
+          <li><strong>Modeller → Kur</strong> ile konuşma modelini kurun (aşağıya bakın).</li>
+          <li><strong>Dosya oluştur</strong> ile bir dosya açın ve bir kayıt ekleyin.</li>
+          <li><strong>Transkripsiyon</strong> düğmesine basın.</li>
+          <li>Her satırı sesle karşılaştırın, düzenleyin, kaydedin, dışa aktarın.</li>
+        </ol>
+      </section>
+
+      <section class="wrap">
+        <h2>Model kurulumu</h2>
+        <p>
+          Standart kurulum bir konuşma modeli <strong>içermez</strong> (model dosyaları büyük olduğu
+          için ayrı tutulur). İki yol vardır:
+        </p>
+        <ul>
+          <li><strong>İndir:</strong> <em>Modeller → Kur</em>. Önerilen model indirilir ve SHA-256 ile doğrulanır.</li>
+          <li><strong>Çevrimdışı içe aktar:</strong> Çevrimdışı model paketini indirin ve <em>Modeller → Dosyadan içe aktar…</em> ile gösterin.</li>
+        </ul>
+        <p>
+          Model dosyası uygulamayla birlikte değil, ayrı bir paket olarak dağıtılır
+          (<code>ForensicTranscriber-ModelPack-&lt;sürüm&gt;.zip</code>). Uygulama güncellemesi
+          modeli değiştirmez; modeli siz kurarsınız.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>CPU / GPU davranışı</h2>
+        <p>
+          CPU çalışma zamanı her zaman paketlenir ve evrensel geri dönüştür. GPU (CUDA) çalışma
+          zamanı isteğe bağlıdır ve yalnızca makinede desteklenen bir NVIDIA GPU varsa kullanılır.
+        </p>
+        <ul>
+          <li><strong>GPU yeteneği</strong> ile <strong>GPU seçimi</strong> ayrı olgulardır; uygulama ikisini ayrı ayrı bildirir.</li>
+          <li>Uygulama içinden <strong>Motoru denetle</strong> ile kurulu çalışma zamanının CUDA olup olmadığını ve bir çalıştırmada hangi aygıtın kullanıldığını görürsünüz.</li>
+          <li>Transkripsiyon panelindeki <strong>Varsa GPU kullan</strong> seçeneği yalnızca gerçekten GPU kullanılabilirse etkilidir; aksi halde CPU'ya düşer ve bunu dürüstçe bildirir.</li>
+        </ul>
+        <p class="fineprint">
+          Bu sürüm CPU çalışma zamanıyla yayımlanır. GPU hızlanması yalnızca CUDA çalışma zamanı
+          paketlendiğinde ve makinede uygun NVIDIA donanımı bulunduğunda kullanılabilir.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Dosya oluşturma ve medya ekleme</h2>
+        <p>
+          <strong>Dosya oluştur</strong> ile dosya künyesini (dosya numarası, makam, atama tarihi,
+          teslim tarihi, kapsam, istenen sorular) girin. Ardından <strong>Kayıt ekle</strong> ile
+          ses dosyasını seçin veya sürükleyip bırakın. Desteklenen biçimler: WAV, MP3, M4A, AAC,
+          FLAC, OGG, OPUS, WMA ve video kapları (yalnızca ses kanalı alınır).
+        </p>
+        <ul>
+          <li>Dosya kopyalanırken önce geçici bir dosyaya yazılır, boyut/özet doğrulanır, sonra atomik olarak yerine taşınır; yarım dosya geçerli delil olarak kalmaz.</li>
+          <li>Orijinal dosyanın SHA-256 özeti ve teknik meta verisi (süre, örnekleme, kanal, bit derinliği, codec) kaydedilir.</li>
+          <li>Bir medya dosyasında birden fazla ses akışı varsa hangisinin seçildiği görünür olur; sessizce yanlış akış kullanılmaz.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Transkripsiyon</h2>
+        <p>
+          <strong>Transkripsiyon</strong> düğmesi kaydı yerel olarak metne dönüştürür. İşlem
+          sırasında ilerleme, kalan süre ve iptal düğmesi görünür. İşlem bittiğinde çalışma
+          <code>BAŞLADI → BAŞARILI</code>, <code>BAŞLADI → BAŞARISIZ</code> veya
+          <code>BAŞLADI → İPTAL</code> durumlarından biriyle kapanır; yetim bir çalışma kalmaz.
+        </p>
+        <p class="fineprint">
+          Otomatik çıktı bir <strong>ilk taslaktır</strong> ve her zaman uzman incelemesi gerektirir.
+          Türkçe doğruluk gürültülü, örtüşen veya telefon kalitesindeki kayıtlarda düşer.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Ses ve transkript inceleme</h2>
+        <p>
+          Transkript satırları zaman hizalıdır. Bir satıra tıkladığınızda oynatıcı tam o ses
+          bölümüne gider. Oynatıcıda geri/ileri, hız ve konuşmacı etiketleri bulunur. Satırlar
+          <em>İncelenmedi / Düşük güven / Düzeltildi / Belirsiz / İncelendi / Doğrulandı</em>
+          durumlarına göre süzülebilir; her satırın güven değeri görünür.
+        </p>
+        <p>
+          <strong>Orijinali göster</strong> ile makine metni her zaman görülebilir kalır; uzman
+          düzeltmesi makine metnini silmez.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Düzenleme</h2>
+        <ul>
+          <li>Metni düzenleyin, satırı <strong>bölün</strong>, sonrakiyle <strong>birleştirin</strong>, konuşmacı etiketi atayın.</li>
+          <li>Satırı <strong>İncelendi</strong> veya <strong>Doğrulandı</strong> olarak işaretleyin.</li>
+          <li>Geri al / yinele desteklenir.</li>
+          <li>Notlar ve yer imleri ekleyin; notlar yalnızca o dosyanın içinde saklanır, hiçbir yere gönderilmez.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Revizyonlar — makine metni ve uzman metni ayrıdır</h2>
+        <p>
+          Temel kural: <strong>makine (ASR) çıktısı ile uzman tarafından düzenlenmiş metin
+          birbirinin üzerine asla sessizce yazmaz.</strong>
+        </p>
+        <ol class="steps">
+          <li>1. transkripsiyon → makine revizyonu oluşur.</li>
+          <li>Uzman düzenler ve <em>İncelendi / Düzenlendi / Doğrulandı</em> durumuna getirir.</li>
+          <li>Yeni bir transkripsiyon çalıştırılırsa → <strong>yeni</strong> bir makine revizyonu oluşur; uzman revizyonu korunur.</li>
+          <li>Uzman isterse <em>Rapor → Sürümler</em> üzerinden önceki bir sürümü geçerli sürüm yapabilir; bu işlem sonraki sürümleri silmez.</li>
+        </ol>
+        <p>
+          Her kayıt değiştirilemez bir sürüm (revizyon) ekler. <code>Doğrulandı</code> durumu
+          yanlışlıkla ezilmez.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Rapor stüdyosu</h2>
+        <p>
+          <em>Rapor…</em> ile teknik rapor çalışma alanı açılır: bölümler, istenen sorular,
+          kaynaklar ve bir kontrol listesi. Rapor; makine çıktısını ve uzman tarafından incelenmiş
+          metni <strong>hangi revizyondan üretildiği kayıtlı olarak</strong> içerir.
+        </p>
+        <ul>
+          <li>Her kayıt değiştirilemez bir rapor sürümü ekler; <code>NİHAİ</code> bir rapor sessizce üzerine yazılamaz.</li>
+          <li>Rapor DOCX, PDF, HTML ve TXT olarak dışa aktarılır. PDF tek yazı tipiyle üretilir; Türkçe karakterler için DOCX/HTML tam UTF-8 metni taşır.</li>
+          <li>Rapor çıktısı resmi bir rapor şablonu değil, bir çalışma taslağıdır ve hukuki görüş içermez.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Yerel asistan (varsa)</h2>
+        <p>
+          Uygulamada isteğe bağlı, <strong>varsayılan olarak kapalı</strong> bir yerel asistan
+          bulunur. Büyük dil modeli kullanmaz, ağ bağlantısı kurmaz ve telemetri üretmez; yalnızca
+          sizin kayıtlarınızdan deterministik bir taslak oluşturur. Durumu uygulama içinde açıkça
+          bildirilir.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Teslim paketi</h2>
+        <p>
+          <em>Teslim paketi</em> tek bir arşivde raporu, transkriptleri, teknik meta veriyi ve
+          özetleri toplar; alıcı neyin teslim edildiğini doğrulayabilir. İçindekiler:
+        </p>
+        <ul>
+          <li><code>manifest.json</code> ve <code>manifest.sha256</code> — içerik ve her girdinin özeti.</li>
+          <li><code>report/</code> — rapor (DOCX, PDF, HTML, TXT).</li>
+          <li><code>transcript/</code> — her kaydın geçerli revizyondan JSON ve SRT transkripti.</li>
+          <li><code>metadata/</code> — delil meta verisi, özetler, motor/model/çalışma zamanı kökeni.</li>
+          <li>Orijinal delil yalnızca açıkça isterseniz ve küçükse eklenir; çok saatlik bir kayıt yanlışlıkla kopyalanmaz.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>UYAP'a hazır akış</h2>
+        <p>
+          <em>UYAP teslim klasörü…</em> rapor ve transkript dosyalarını yerel bir klasöre yazar;
+          bildirim dosyası her dosyanın <strong>hangi transkript revizyonundan</strong> üretildiğini
+          kaydeder. Hiçbir şey yüklenmez. Bu bir teslim yardımcısıdır, hukuki bir dosyalama değildir.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Yedekleme ve geri yükleme</h2>
+        <ul>
+          <li><strong>Dosyayı yedekle…</strong> bir dosyayı arşivler (delil, transkriptler, revizyonlar, çalışma kayıtları, rapor sürümleri, bulgular, notlar, geçmiş).</li>
+          <li><strong>Dosyayı geri yükle…</strong> arşivi <strong>yeni bir dosya</strong> olarak açar; mevcut dosyanın üzerine yazmaz.</li>
+          <li>Geri yüklemede delil özetleri doğrulanır ve tüm bağlantılar (delil → transkript → revizyon → bulgu) korunur.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Sorun giderme</h2>
+        <ul>
+          <li><strong>Model kurulu değil:</strong> <em>Modeller → Kur</em> veya çevrimdışı paketi içe aktarın.</li>
+          <li><strong>Transkripsiyon başlamıyor:</strong> <em>Motoru denetle</em> ile çalışma zamanını kontrol edin; gerekirse CPU'ya bırakın.</li>
+          <li><strong>SmartScreen uyarısı:</strong> kurulum imzasızdır; "Yine de çalıştır" ile devam edin.</li>
+          <li><strong>Veri klasörü:</strong> <em>Dosyalar → Veri klasörünü aç</em>.</li>
+          <li><strong>Destek paketi:</strong> <em>Destek</em> ile teknik özeti (sürüm, motor, platform, günlükler) kaydedin; dosya içeriği paylaşılmaz.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>SSS</h2>
+        <dl class="faq">
+          <dt>Kayıtlarım bir yere yükleniyor mu?</dt>
+          <dd>Hayır. Tek dışa açılan ağ çağrısı, sizin başlattığınız model indirmesidir. Ses yüklenmez, telemetri yoktur.</dd>
+          <dt>İnternet olmadan çalışır mı?</dt>
+          <dd>Evet. Çevrimdışı model paketiyle kurulum, açılış ve transkripsiyon internet olmadan yapılabilir.</dd>
+          <dt>GPU kullanıyor mu?</dt>
+          <dd>CPU her zaman çalışır. GPU yalnızca CUDA çalışma zamanı paketlenmişse ve makinede uygun NVIDIA GPU varsa kullanılır; uygulama bunu dürüstçe bildirir.</dd>
+          <dt>Otomatik metin uzman metnini ezer mi?</dt>
+          <dd>Hayır. Yeni transkripsiyon yeni bir makine revizyonu oluşturur; uzman revizyonu korunur.</dd>
+          <dt>Rapor hukuki bir belge mi?</dt>
+          <dd>Hayır. Teknik bir iş ürünüdür; hukuki görüş, konuşmacı kimliklendirmesi veya orijinallik tespiti içermez.</dd>
+          <dt>Hangi dosya biçimleri?</dt>
+          <dd>Ses: WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, WMA. Video yalnızca ses kanalı için kabul edilir.</dd>
+          <dt>Güncellemeler nasıl gelir?</dt>
+          <dd>Uygulama açılışta GitHub Releases üzerinden yeni sürüm olup olmadığını denetler. İndirme ve kurma yalnızca sizin onayınızla yapılır.</dd>
+        </dl>
+      </section>
+
+      <section class="wrap">
+        <h2>Gizlilik</h2>
+        <p>
+          Telemetri yok. Analitik yok. Giriş yok. Hesap yok. Ses yüklemesi yok. Dosya verisi
+          bilgisayarınızdaki yerel bir SQLite veritabanında saklanır. Uygulamadaki tek dışa açılan
+          ağ çağrısı, sizin başlattığınız ve özetle doğrulanan model indirmesidir.
+        </p>
+        <p class="notice">
+          Bu site statik bir tanıtım ve indirme portalıdır. Buraya <strong>hiçbir dosya veya kayıt
+          yüklemeyin</strong>. Bu site ses işlemez. Sayfayı barındıran GitHub, güvenlik amacıyla
+          ziyaretçi IP adreslerini kaydettiğini belirtir.
+        </p>
+      </section>
+
+      <section class="wrap" id="release">
+        <h2>Güncel sürüm ve değişiklikler</h2>
+        <p>
+          Güncel sürüm: <strong id="release-version">—</strong>
+          <span id="release-date" class="fineprint"></span>
+        </p>
+        <ul class="links">
+          <li><a id="release-link" href="https://github.com/azmisahin-gov/forensic-transcriber/releases">Sürüm sayfası</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/CHANGELOG.md">CHANGELOG.md</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/VERIFICATION.md">Doğrulama durumu</a></li>
+        </ul>
+        <div id="release-notes" class="release-notes" hidden>
+          <h3>Bu sürümdeki değişiklikler</h3>
+          <div id="release-notes-body"></div>
         </div>
-        <div class="card">
-          <h3>Offline model package</h3>
-          <p>Default ASR model + VAD, with a checksummed manifest. For air-gapped machines.</p>
-          <a class="btn btn-small" id="download-modelpack" href="https://github.com/azmisahin-gov/forensic-transcriber/releases/latest">Download model package</a>
-        </div>
-      </div>
-      <p>
-        Every release publishes <code>SHA256SUMS.txt</code> for all artefacts. The standard
-        installer and portable zip do not include a model; on first launch open
-        <strong>Models → Install</strong>, or import the offline model package.
-      </p>
-      <p class="fineprint">
-        GPU: the application uses the bundled CUDA runtime when the machine has a supported
-        NVIDIA GPU, and otherwise runs on the CPU. Open the app and press
-        <strong>Check engine</strong> to see whether the installed runtime is CUDA-capable and
-        which device a run used.
-      </p>
-      <h3>Quick start</h3>
-      <ol class="steps">
-        <li>Download and run the installer.</li>
-        <li>Open the application and go to <strong>Models → Install</strong>.</li>
-        <li><strong>New case</strong>, then import a recording.</li>
-        <li>Press <strong>Transcribe</strong>.</li>
-        <li>Review each line against the audio, edit, save, export.</li>
-      </ol>
-      <p class="fineprint">
-        You do not need Python, Node.js, Rust, CMake, the CUDA Toolkit or FFmpeg installed.
-        Those are only needed to build the application from source.
-      </p>
-    </section>
+        <noscript><p class="fineprint">Sürüm bilgisi için sürüm sayfasına bakın.</p></noscript>
+      </section>
 
-    <section class="wrap">
-      <h2>Privacy</h2>
-      <p>
-        No telemetry. No analytics. No login. No account. No audio upload. Case data is stored in a
-        local SQLite database on your machine. The only outbound network call in the whole
-        application is the explicit, checksum-verified model download you trigger.
-      </p>
-      <p class="notice">
-        This site is static documentation and a download portal. Do not upload case material here.
-        This website does not process audio. GitHub, which hosts this page, states that it records
-        visitors' IP addresses for security purposes.
-      </p>
-    </section>
+      <section class="wrap">
+        <h2>Sınırlamalar</h2>
+        <ul>
+          <li>Otomatik çıktı bir ilk taslaktır ve her zaman uzman incelemesi gerektirir.</li>
+          <li>Konuşmacı kimliklendirmesi, duygu/yalan tespiti veya orijinallik analizi kapsam dışıdır.</li>
+          <li>Video dosyaları yalnızca ses kanalı için kabul edilir.</li>
+          <li>Türkçe doğruluk gürültülü, örtüşen veya telefon kalitesindeki kayıtlarda düşer.</li>
+          <li>Windows yürütülebilir dosyası kod imzalı değildir.</li>
+        </ul>
+      </section>
 
-    <section class="wrap">
-      <h2>Limitations</h2>
-      <ul>
-        <li>Automatic output is a first draft and always requires expert review.</li>
-        <li>No speaker identification, diarization-based naming, emotion/lie detection or
-            authenticity analysis — those are out of scope.</li>
-        <li>Video files are accepted only for their audio track.</li>
-        <li>PDF export is not included in this release.</li>
-        <li>Turkish accuracy drops on noisy, overlapping or telephone-quality audio.</li>
-      </ul>
-    </section>
+      <section class="wrap">
+        <h2>Lisans</h2>
+        <p>
+          Uygulama kodu <strong>AGPL-3.0-only</strong>. Paketlenen bileşenler ve modellerin kendi
+          lisansları vardır: Electron ve whisper.cpp MIT, FFmpeg LGPL, Whisper/Silero modelleri MIT.
+          Ayrıntı:
+          <a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>.
+        </p>
+      </section>
 
-    <section class="wrap">
-      <h2>License</h2>
-      <p>
-        Application code is <strong>AGPL-3.0-only</strong>. Bundled components and models have their
-        own licenses: Electron and whisper.cpp are MIT, FFmpeg is LGPL, and the Whisper/Silero
-        models are MIT. See
-        <a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES.md</a>.
-      </p>
-    </section>
+      <section class="wrap">
+        <h2>Bağlantılar</h2>
+        <ul class="links">
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber">Kaynak kod</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/releases">Sürümler</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/scope.md">Kapsam</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/architecture.md">Mimari</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/methodology.md">Yöntem</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/security.md">Güvenlik</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/LICENSE">Lisans</a></li>
+        </ul>
+      </section>
+    </div>
 
-    <section class="wrap">
-      <h2>Links</h2>
-      <ul class="links">
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber">Source code</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/releases">Releases</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/scope.md">Scope</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/architecture.md">Architecture</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/methodology.md">Methodology</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/docs/security.md">Security</a></li>
-        <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/LICENSE">License</a></li>
-      </ul>
-    </section>
+    <!-- ============================================================ EN ======= -->
+    <div data-lang-block="en" hidden>
+      <section class="wrap">
+        <h2>What is it?</h2>
+        <p>
+          Forensic Transcriber is a Windows desktop application for the expert area
+          <strong>56.12 — transcription of audio recordings</strong>. It imports a recording,
+          records its technical metadata and a SHA-256, transcribes it locally with
+          <a href="https://github.com/ggml-org/whisper.cpp">whisper.cpp</a>, and gives you a review
+          workspace where every transcript line is tied to the exact moment in the audio.
+        </p>
+        <p class="notice">
+          A technical transcription and review aid. It is not a forensic opinion, legal assessment,
+          speaker identification, or authenticity determination, and it is not a 56.11
+          audio/video analysis system.
+        </p>
+        <p>
+          It is for forensic transcription experts and bilirkişi working under 56.12, and for teams
+          that require recordings to stay on the machine. Out of scope: speaker identification,
+          voice comparison, biometrics, deepfake/manipulation detection, emotion/lie analysis,
+          threat classification and legal interpretation. Video is accepted only for its audio track.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Install, models, CPU/GPU</h2>
+        <ul>
+          <li><strong>Install:</strong> run <code>ForensicTranscriber-Setup-x64.exe</code> (unsigned — SmartScreen may warn), or unzip the portable build.</li>
+          <li><strong>Models:</strong> not bundled. Use <em>Models → Install</em>, or import the offline model package (<code>ForensicTranscriber-ModelPack-&lt;version&gt;.zip</code>).</li>
+          <li><strong>CPU/GPU:</strong> the CPU runtime always ships. The CUDA runtime is used only when it is bundled and the machine has a supported NVIDIA GPU. Use <em>Check engine</em> to see capability and which device a run used.</li>
+        </ul>
+      </section>
+
+      <section class="wrap">
+        <h2>Workflow</h2>
+        <ol class="steps">
+          <li>New case → import a recording (picker or drag-and-drop).</li>
+          <li>Transcribe locally; the run ends SUCCEEDED, FAILED or CANCELLED — never orphaned.</li>
+          <li>Review each line against the audio, edit, split/merge, label speakers, mark reviewed/verified.</li>
+          <li>Notes and bookmarks stay inside the case.</li>
+          <li>Report studio: sections, questions, sources, checklist, DOCX/PDF/HTML/TXT export.</li>
+          <li>Delivery package and UYAP hand-off folder; backup/restore a whole case.</li>
+        </ol>
+      </section>
+
+      <section class="wrap">
+        <h2>Revisions</h2>
+        <p>
+          Machine (ASR) output and expert-edited text never silently overwrite each other. A new
+          transcription creates a <strong>new machine revision</strong>; the expert's reviewed or
+          verified revision is preserved and still shown. Every save appends an immutable revision;
+          restoring one does not delete later ones.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Privacy and updates</h2>
+        <p>
+          No telemetry, analytics, login, account or audio upload. The only outbound call is the
+          explicit, checksum-verified model download you trigger. Updates are checked against GitHub
+          Releases; download and install happen only with your consent. This site is static
+          documentation and a download portal — never upload case material here.
+        </p>
+      </section>
+
+      <section class="wrap">
+        <h2>Current release</h2>
+        <p>Version: <strong id="release-version-en">—</strong></p>
+        <ul class="links">
+          <li><a id="release-link-en" href="https://github.com/azmisahin-gov/forensic-transcriber/releases">Releases</a></li>
+          <li><a href="https://github.com/azmisahin-gov/forensic-transcriber/blob/main/CHANGELOG.md">CHANGELOG.md</a></li>
+        </ul>
+        <p class="fineprint">
+          License: application code AGPL-3.0-only; bundled Electron/whisper.cpp MIT, FFmpeg LGPL,
+          Whisper/Silero models MIT.
+        </p>
+      </section>
+    </div>
   </main>
 
   <footer>
     <div class="wrap">
-      <p>Forensic Transcriber — local-first transcription workspace for 56.12 audio transcription workflows.</p>
-      <p class="fineprint">Technical transcription and review aid. Not a legal assessment, not speaker identification, not an authenticity determination.</p>
+      <p>Forensic Transcriber — 56.12 ses kayıtlarının metin haline dönüştürülmesi için yerel çalışan çalışma istasyonu.</p>
+      <p class="fineprint">Teknik transkripsiyon ve inceleme aracı. Hukuki değerlendirme, konuşmacı kimliklendirmesi veya orijinallik tespiti değildir.</p>
     </div>
   </footer>
 

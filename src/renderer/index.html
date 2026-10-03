@@ -81,9 +81,12 @@
             <div id="case-subtitle" class="muted small"></div>
           </div>
           <div class="case-header-actions">
+            <button id="btn-search" class="btn" type="button" data-i18n="case.search">Dosyada ara…</button>
             <button id="btn-notes" class="btn" type="button" data-i18n="case.notes">Notlar…</button>
+            <button id="btn-findings" class="btn" type="button" data-i18n="case.findings">Bulgular…</button>
             <button id="btn-report" class="btn" type="button" data-i18n="case.report">Rapor…</button>
             <button id="btn-delivery" class="btn" type="button" data-i18n="case.delivery">Teslim paketi…</button>
+            <button id="btn-uyap" class="btn" type="button" data-i18n="case.uyap">UYAP teslim klasörü…</button>
             <button id="btn-support" class="btn" type="button" data-i18n="case.support">Destek paketi…</button>
             <button id="btn-archive-export" class="btn" type="button" data-i18n="case.backup">Dosyayı yedekle…</button>
             <button id="btn-archive-import" class="btn" type="button" data-i18n="case.restore">Dosyayı geri yükle…</button>
@@ -394,8 +397,47 @@
       </div>
       <h3 data-i18n="report.checklist">Teslime hazırlık kontrol listesi</h3>
       <ul id="report-checklist" class="checklist"></ul>
+      <h3 data-i18n="report.revisions">Rapor revizyonları</h3>
+      <p class="muted small" data-i18n="report.revisionsNote">
+        Her kayıt değiştirilemez bir sürüm oluşturur. Bir sürümü geri yüklemek sonraki sürümleri silmez.
+      </p>
+      <ul id="report-revisions" class="revision-list"></ul>
       <menu>
         <button value="cancel" class="btn" data-i18n="report.close">Kapat</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-findings" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="finding.title">Bulgular</h2>
+      <p class="muted small" data-i18n="finding.note">
+        Her bulgu, kaynağına (materyal ve transkript revizyonu) açıkça bağlıdır. Bulgu bir gözlemdir; hukuki değerlendirme değildir.
+      </p>
+      <ul id="findings-list" class="findings-list"></ul>
+      <label class="field"><span data-i18n="finding.newTitle">Başlık</span><input id="finding-title" class="input" maxlength="200" /></label>
+      <label class="field"><span data-i18n="finding.observation">Gözlem</span><textarea id="finding-observation" class="input" rows="2"></textarea></label>
+      <label class="field"><span data-i18n="finding.at">Zaman (saniye, isteğe bağlı)</span><input id="finding-at" class="input" type="number" step="0.1" min="0" /></label>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="finding.close">Kapat</button>
+        <button id="btn-add-finding" value="default" class="btn btn-primary" data-i18n="finding.add">Bulgu ekle</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-search" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="search.title">Dosyada ara</h2>
+      <p class="muted small" data-i18n="search.note">
+        Transkript satırlarında, notlarda ve bulgularda arar. Arama yalnızca bu bilgisayarda çalışır.
+      </p>
+      <div class="update-actions">
+        <input id="case-search-input" class="input" type="search" data-i18n-attr="placeholder:search.placeholder" placeholder="Aranacak sözcük…" />
+        <button id="btn-case-search" class="btn btn-small btn-primary" type="button" data-i18n="search.run">Ara</button>
+      </div>
+      <ul id="case-search-results" class="search-results"></ul>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="search.close">Kapat</button>
       </menu>
     </form>
   </dialog>

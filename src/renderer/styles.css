@@ -281,6 +281,17 @@ textarea.input { resize: vertical; }
 .note-row .meta .spacer { flex: 1; }
 .note-row .cat { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
 
+/* Findings, report revisions and case search share the note-row shape */
+.findings-list, .revision-list, .search-results { list-style: none; margin: 8px 0 12px; padding: 0; max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.finding-row, .revision-row, .search-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg-3); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.finding-row { flex-direction: column; align-items: stretch; }
+.finding-row .body, .search-row .body { font-size: 13px; line-height: 1.45; word-break: break-word; }
+.finding-row .meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11px; color: var(--text-mute); }
+.finding-row .meta .spacer { flex: 1; }
+.finding-row .cat { font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
+.revision-row .rev-state, .search-row .rev-state { flex: 0 0 auto; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
+.revision-row .spacer { flex: 1; }
+
 /* Checklist */
 .checklist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .checklist li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }

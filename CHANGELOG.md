@@ -5,6 +5,43 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Report revisions (append-only).** Saving a report appends an immutable
+  `report_revisions` row (schema_version 6). The working draft is `reports`; a
+  `FINAL` report cannot be silently overwritten (`REPORT_FINAL_LOCKED`), and an
+  operator can restore an earlier revision without deleting later ones. Report
+  revision state is a distinct concept from transcript revision state.
+- **Structured findings.** `findings` rows record an observation with an
+  explicit source link (evidence + transcript revision + timestamp). Findings are
+  CRUD-managed and carry no legal assessment.
+- **Full-text search.** A guarded FTS5 index (`search_index`) over transcript
+  segments, notes and findings. `searchCase()` uses FTS5 `MATCH` when available
+  and falls back to a substring scan when FTS5 is not compiled in.
+- **Windowed transcript reads.** `getSegmentPage()` / `getSegmentAt()` let the UI
+  page long transcripts instead of loading every segment.
+- **Archive provenance extension.** Archive v2 now also carries notes, findings
+  and report revisions; restore re-creates them with explicit `old id → new id`
+  remapping (including the finding → transcript-revision link).
+- **UYAP hand-off folder.** `prepareUyapPackage()` writes a local report +
+  transcript folder with a manifest that records the transcript revision each
+  file came from. Nothing is uploaded; it is a hand-off aid, not a legal filing.
+- **Optional local assist (off by default).** A deterministic draft builder that
+  assembles the operator's own records. No language model, no network call, no
+  telemetry; `status()` reports this honestly.
+- **Regression coverage** for the above in
+  `tests/unit/v1-professionalization.test.js` and
+  `tests/unit/v1-ui-wiring.test.js`, plus the UI entry points (report revisions,
+  findings, case search, UYAP) wired through preload/IPC with tr/en strings.
+- **Turkish-first public site.** The GitHub Pages site now defaults to Turkish
+  with an optional English section, covers the full workflow (install, models,
+  CPU/GPU, case/media, transcription, review, editing, revisions, report studio,
+  delivery package, UYAP hand-off, backup/restore, troubleshooting, FAQ,
+  privacy), and resolves the current release version, notes and the model-package
+  asset name from the public Releases API instead of a hard-coded `0.1.0` link.
+  Regression tests assert the language default and the absence of a stale
+  version.
+
 ## [0.2.0] - 2026-10-03
 
 ### Added

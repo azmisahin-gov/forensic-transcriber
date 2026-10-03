@@ -18,8 +18,9 @@ const { runExport } = require('./services/exporter');
 const { writeCaseArchive, restoreCaseArchive } = require('./services/case-archive');
 const reports = require('./services/reports');
 const { reportToDocx, reportToPdf } = require('./services/report-render');
-const { writeDeliveryPackage, buildDeliveryPackage } = require('./services/delivery');
+const { writeDeliveryPackage, buildDeliveryPackage, prepareUyapPackage } = require('./services/delivery');
 const { writeSupportBundle, buildSupportBundle } = require('./services/support');
+const aiAssist = require('./services/assist');
 const { copyFileAtomic, writeFileAtomic } = require('./services/atomic');
 const { createUpdater, STATES: UPDATE_STATES } = require('./services/updater');
 const { resolveBinary, userDataDir, modelsDir } = require('./services/paths');
@@ -811,6 +812,63 @@ function registerIpc() {
       files: written.map((w) => ({ format: w.format, path: w.path, sha256: w.sha256 })),
     });
     return { dir, files: written, report: built };
+  });
+
+  // Report revisions are append-only snapshots. The working draft is saved with
+  // REPORT_SAVE; these expose the immutable history and let the operator restore
+  // an earlier snapshot as the working draft without destroying later ones.
+  handle(IPC.REPORT_REVISIONS, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listReportRevisions(caseId);
+  });
+  handle(IPC.REPORT_REVISION_GET, async (_e, revisionId) => storage.getReportRevision(revisionId));
+  handle(IPC.REPORT_REVISION_SET, async (_e, caseId, revisionId) => {
+    requireCase(caseId);
+    const rev = storage.getReportRevision(revisionId);
+    if (!rev || rev.case_id !== caseId) {
+      throw Object.assign(new Error('Report revision is not part of this case.'), { code: 'REPORT_REVISION_NOT_FOUND' });
+    }
+    return storage.setCurrentReportRevision(revisionId);
+  });
+
+  // Structured findings: an observation with an explicit source link.
+  handle(IPC.FINDING_CREATE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.createFinding(caseId, payload || {});
+  });
+  handle(IPC.FINDING_LIST, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listFindings(caseId);
+  });
+  handle(IPC.FINDING_UPDATE, async (_e, findingId, patch) => storage.updateFinding(findingId, patch || {}));
+  handle(IPC.FINDING_DELETE, async (_e, findingId) => storage.deleteFinding(findingId));
+
+  // Windowed transcript reads for virtualised rendering of long recordings.
+  handle(IPC.TRANSCRIPT_PAGE, async (_e, transcriptId, options = {}) =>
+    storage.getSegmentPage(transcriptId, options || {})
+  );
+  handle(IPC.SEARCH_INDEX, async (_e, caseId) => {
+    requireCase(caseId);
+    const rebuilt = storage.rebuildSearchIndex(caseId);
+    return { rebuilt, engine: storage.ftsAvailable ? 'fts5' : 'like' };
+  });
+
+  // Optional local assist. Off by default, no model is downloaded or bundled,
+  // and nothing is ever sent off the machine. The operator always edits and
+  // verifies the text; the assist only pre-fills a suggestion.
+  handle(IPC.AI_STATUS, async () => aiAssist.status());
+  handle(IPC.AI_GENERATE, async (_e, input = {}) => {
+    const { caseId, evidenceId, action, prompt, revisionId } = input;
+    requireCase(caseId);
+    return aiAssist.generate({ storage, caseId, evidenceId, action, prompt, revisionId });
+  });
+
+  // UYAP delivery: assemble the report and transcript exports into a folder the
+  // user picks. Nothing is uploaded; this is a local hand-off aid, not a legal
+  // filing claim.
+  handle(IPC.UYAP_PREPARE, async (_e, caseId, options = {}) => {
+    const kase = requireCase(caseId);
+    return prepareUyapPackage({ storage, caseId: kase.case_id, options, storageCaseDir: kase.case_dir });
   });
 
   // ---------------------------------------------------------- delivery pkg

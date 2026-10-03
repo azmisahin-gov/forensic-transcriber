@@ -54,6 +54,25 @@ const api = {
     build: (caseId) => ipcRenderer.invoke(IPC.REPORT_BUILD, caseId),
     export: (caseId, options) => ipcRenderer.invoke(IPC.REPORT_EXPORT, caseId, options),
     checklist: (caseId) => ipcRenderer.invoke(IPC.REPORT_CHECKLIST, caseId),
+    revisions: (caseId) => ipcRenderer.invoke(IPC.REPORT_REVISIONS, caseId),
+    revision: (revisionId) => ipcRenderer.invoke(IPC.REPORT_REVISION_GET, revisionId),
+    setRevision: (caseId, revisionId) => ipcRenderer.invoke(IPC.REPORT_REVISION_SET, caseId, revisionId),
+  },
+  findings: {
+    list: (caseId) => ipcRenderer.invoke(IPC.FINDING_LIST, caseId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.FINDING_CREATE, caseId, input),
+    update: (findingId, patch) => ipcRenderer.invoke(IPC.FINDING_UPDATE, findingId, patch),
+    remove: (findingId) => ipcRenderer.invoke(IPC.FINDING_DELETE, findingId),
+  },
+  searchIndex: {
+    rebuild: (caseId) => ipcRenderer.invoke(IPC.SEARCH_INDEX, caseId),
+  },
+  ai: {
+    status: () => ipcRenderer.invoke(IPC.AI_STATUS),
+    generate: (input) => ipcRenderer.invoke(IPC.AI_GENERATE, input),
+  },
+  uyap: {
+    prepare: (caseId, options) => ipcRenderer.invoke(IPC.UYAP_PREPARE, caseId, options),
   },
   delivery: {
     build: (caseId, options) => ipcRenderer.invoke(IPC.DELIVERY_BUILD, caseId, options),
@@ -88,6 +107,7 @@ const api = {
     save: (caseId, evidenceId, payload) => ipcRenderer.invoke(IPC.TRANSCRIPT_SAVE, caseId, evidenceId, payload),
     revisions: (caseId, evidenceId) => ipcRenderer.invoke(IPC.TRANSCRIPT_REVISIONS, caseId, evidenceId),
     setRevision: (revisionId) => ipcRenderer.invoke(IPC.TRANSCRIPT_SET_REVISION, revisionId),
+    page: (transcriptId, options) => ipcRenderer.invoke(IPC.TRANSCRIPT_PAGE, transcriptId, options),
   },
   transcribe: {
     start: (input) => ipcRenderer.invoke(IPC.TRANSCRIBE_START, input),

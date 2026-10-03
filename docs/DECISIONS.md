@@ -194,6 +194,42 @@ problem, not a cosmetic one. Key-for-key parity is enforced by a regression test
 so a new string cannot ship in only one language. Keeping the dictionary in-repo
 (no runtime dependency, no network fetch) preserves the offline-first guarantee.
 
+## D8e — Report revisions, findings and search are additive provenance
+
+**Context.** The professionalization phase adds a report workspace (draft +
+append-only revisions), structured findings, full-text search and a UYAP
+hand-off folder. These touch the same "who wrote what" surfaces as the D8/D8b
+transcript revision model, so they must not create a second, weaker notion of
+history.
+
+**Decision.**
+
+- **Report revisions are append-only.** Saving a report appends a
+  `report_revisions` row; the `reports` row is the working draft. A `FINAL`
+  report cannot be silently overwritten (`REPORT_FINAL_LOCKED`). Restoring an
+  earlier revision (`transcript:set-revision` analogue `report:set-revision`)
+  makes it current without deleting later snapshots. Report revision state is a
+  **separate** concept from transcript revision state; neither is derived from
+  the other.
+- **Findings carry an explicit source link.** A `findings` row records the
+  evidence and the transcript revision it was observed against, so a finding is
+  never re-attached to a different revision by accident, across archive/restore
+  included. Findings are observations, not legal conclusions.
+- **Search is an index, not a source of truth.** `search_index` (FTS5 when
+  available) is a derived cache over segments/notes/findings; it is rebuilt from
+  the rows, and a missing FTS5 falls back to a substring scan. A wrong or absent
+  index can never change stored data.
+- **Archive v2 round-trips all of it.** Notes, findings and report revisions are
+  carried in the archive and re-created on restore with explicit `old id → new
+  id` remapping, including the finding → restored transcript-revision link.
+
+**Why.** The core invariant is that machine and expert output never silently
+overwrite each other. Extending that invariant to reports (append-only) and
+findings (source-linked) keeps one consistent provenance story at every
+lifecycle stage — live, saved, archived, restored, exported — while staying
+dependent only on in-repo infrastructure (no new runtime dependency, no
+network).
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,
