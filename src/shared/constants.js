@@ -32,6 +32,17 @@
 
   const UNCLEAR_PLACEHOLDER = '[ANLAŞILAMADI]';
 
+  // A transcript revision is one immutable snapshot of a transcript's segments.
+  // It records whether the snapshot is machine output or human-reviewed work, so
+  // a new ASR run can never silently erase a reviewed/edited/verified revision.
+  const REVISION_STATE = Object.freeze({
+    MACHINE: 'MACHINE',
+    REVIEWED: 'REVIEWED',
+    EDITED: 'EDITED',
+    VERIFIED: 'VERIFIED',
+  });
+  const REVISION_STATE_VALUES = Object.freeze(Object.values(REVISION_STATE));
+
   const TRANSCRIPT_SCHEMA_VERSION = '1.0';
   const CASE_SCHEMA_VERSION = '1.0';
 
@@ -89,6 +100,8 @@
     TRANSCRIBE_PROGRESS: 'transcribe:progress',
     TRANSCRIPT_GET: 'transcript:get',
     TRANSCRIPT_SAVE: 'transcript:save',
+    TRANSCRIPT_REVISIONS: 'transcript:revisions',
+    TRANSCRIPT_SET_REVISION: 'transcript:set-revision',
     HISTORY_LIST: 'history:list',
     HISTORY_RUNS: 'history:runs',
     MODEL_LIST: 'model:list',
@@ -104,6 +117,8 @@
     SEGMENT_STATUS,
     SEGMENT_STATUS_VALUES,
     HUMAN_STATUSES,
+    REVISION_STATE,
+    REVISION_STATE_VALUES,
     UNCLEAR_PLACEHOLDER,
     TRANSCRIPT_SCHEMA_VERSION,
     CASE_SCHEMA_VERSION,
