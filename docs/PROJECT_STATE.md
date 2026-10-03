@@ -4,7 +4,34 @@ CURRENT_PHASE: P11 — release lifecycle
 CURRENT_STATUS: COMPLETE WITH KNOWN LIMITATIONS
 LAST_UPDATED: 2026-10-03
 
-## Latest release: v0.1.3
+## Latest release: v0.1.4
+
+| | |
+| --- | --- |
+| Version | **0.1.4** (patch from 0.1.3) |
+| Tag | `v0.1.4` → commit `a0c8146` |
+| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.4 |
+| Assets | `ForensicTranscriber-Setup-x64.exe` (192 579 456 B), `ForensicTranscriber-Portable-x64.zip` (260 859 799 B), `ForensicTranscriber-ModelPack-0.1.4.zip` (534 060 311 B), `latest.yml`, `SHA256SUMS.txt` |
+| Workflow run | `37114840539` — verify-version, build-windows, model-package, publish all **success** |
+
+v0.1.4 is the **P0 reliability and data-integrity** release: case backup/archive,
+database durability, atomic writes, crash-safe migration, evidence
+re-verification, transcription-run provenance, failed-operation safety and log
+redaction. It also fixes a Windows release blocker (fsync `EPERM` on read
+handles) that the earlier v0.1.4 attempt hit, and adds a `windows-latest` unit-test
+job to CI so that class of failure is caught before a release.
+
+Release history:
+
+| Release | State |
+| --- | --- |
+| v0.1.0 | non-distributable (source archives only) |
+| v0.1.1 | shipped a dead renderer |
+| v0.1.2 | failed when a second recording was added to a case |
+| v0.1.3 | first solid multi-evidence release |
+| **v0.1.4** | current; adds P0 reliability and integrity hardening |
+
+## Earlier release: v0.1.3
 
 | | |
 | --- | --- |
@@ -89,7 +116,7 @@ superseded; it remains published and untouched for the record.
 
 ## Next exact action
 
-Install `ForensicTranscriber-Setup-x64.exe` (v0.1.3) on a real Windows x64
+Install `ForensicTranscriber-Setup-x64.exe` (v0.1.4) on a real Windows x64
 machine, confirm transcription and the **Check engine** report, then publish a
 second release to exercise the live auto-update path.
 
