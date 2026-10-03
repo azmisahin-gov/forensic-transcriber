@@ -33,6 +33,14 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
   `tests/unit/v1-professionalization.test.js` and
   `tests/unit/v1-ui-wiring.test.js`, plus the UI entry points (report revisions,
   findings, case search, UYAP) wired through preload/IPC with tr/en strings.
+- **Turkish-first public site.** The GitHub Pages site now defaults to Turkish
+  with an optional English section, covers the full workflow (install, models,
+  CPU/GPU, case/media, transcription, review, editing, revisions, report studio,
+  delivery package, UYAP hand-off, backup/restore, troubleshooting, FAQ,
+  privacy), and resolves the current release version, notes and the model-package
+  asset name from the public Releases API instead of a hard-coded `0.1.0` link.
+  Regression tests assert the language default and the absence of a stale
+  version.
 
 ## [0.2.0] - 2026-10-03
 

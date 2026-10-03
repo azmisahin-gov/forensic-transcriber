@@ -20,6 +20,9 @@ const INDEX_HTML = fs.readFileSync(path.join(REPO_ROOT, 'src', 'renderer', 'inde
 const RENDERER_JS = fs.readFileSync(path.join(REPO_ROOT, 'src', 'renderer', 'renderer.js'), 'utf8');
 const PRELOAD_JS = fs.readFileSync(path.join(REPO_ROOT, 'src', 'main', 'preload.js'), 'utf8');
 
+const SITE_HTML = fs.readFileSync(path.join(REPO_ROOT, 'site', 'index.html'), 'utf8');
+const SITE_JS = fs.readFileSync(path.join(REPO_ROOT, 'site', 'site.js'), 'utf8');
+
 test('every data-i18n key in index.html resolves in every locale', () => {
   const keys = new Set();
   for (const m of INDEX_HTML.matchAll(/data-i18n="([^"]+)"/g)) keys.add(m[1]);
@@ -61,3 +64,34 @@ test('the preload exposes the new professionalization APIs', () => {
     assert.ok(PRELOAD_JS.includes(method), `preload must expose ${method}`);
   }
 });
+
+// --------------------------------------------------------------- public site
+test('the public site is Turkish-first with an optional English block', () => {
+  assert.match(SITE_HTML, /<html lang="tr">/, 'the site default language must be Turkish');
+  assert.match(SITE_HTML, /data-lang-block="tr"/, 'a Turkish content block must exist');
+  assert.match(SITE_HTML, /data-lang-block="en"[^>]*hidden/, 'the English block must be hidden by default');
+  assert.match(SITE_HTML, /data-set-lang="tr"/, 'a TR toggle must exist');
+  assert.match(SITE_HTML, /data-set-lang="en"/, 'an EN toggle must exist');
+  assert.ok(/Modeller|Transkripsiyon|Rapor|Gizlilik/.test(SITE_HTML), 'Turkish copy must be present');
+});
+
+test('the site never hard-codes a stale release version', () => {
+  assert.ok(!/0\.1\.0/.test(SITE_HTML), 'site html must not reference 0.1.0');
+  assert.ok(!/0\.1\.0/.test(SITE_JS), 'site.js must not reference 0.1.0');
+  // The model-pack link must be resolved from release data, not a fixed name.
+  assert.ok(
+    !/ModelPack-\d+\.\d+\.\d+/.test(SITE_JS),
+    'site.js must not hard-code a ModelPack version'
+  );
+  assert.match(SITE_JS, /releases\/latest/, 'site.js must use the stable latest/download path');
+});
+
+test('the site documents the professionalization scope and download assets', () => {
+  for (const topic of ['56.12', '56.11', 'UYAP', 'SHA256SUMS', 'ModelPack', 'SHA-256']) {
+    assert.ok(SITE_HTML.includes(topic) || SITE_JS.includes(topic), `site must mention ${topic}`);
+  }
+  for (const id of ['download-btn', 'download-portable', 'download-modelpack', 'release-version']) {
+    assert.ok(SITE_HTML.includes(`id="${id}"`), `site must contain #${id}`);
+  }
+});
+

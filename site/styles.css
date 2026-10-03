@@ -104,6 +104,32 @@ p strong { color: var(--text); }
 footer { border-top: 1px solid var(--border); padding: 26px 0 40px; background: var(--bg-2); }
 footer p { font-size: 13.5px; margin: 0 0 6px; }
 
+/* Language toggle */
+.lang-toggle { margin-left: auto; display: inline-flex; gap: 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.lang-btn {
+  border: none; background: transparent; color: var(--dim);
+  font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer;
+}
+.lang-btn.active { background: var(--accent); color: #061019; }
+
+/* Buttons inside cards */
+.btn-small { padding: 8px 13px; font-size: 14px; margin-top: 4px; }
+.card .btn-small { display: inline-block; }
+
+/* FAQ */
+.faq { margin: 0; }
+.faq dt { color: var(--text); font-weight: 600; margin-top: 14px; }
+.faq dt:first-child { margin-top: 0; }
+.faq dd { margin: 4px 0 0; color: var(--dim); }
+
+/* Release notes */
+.release-notes { margin-top: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.release-notes h3 { margin-top: 0; }
+.release-notes p { margin: 0 0 8px; font-size: 14px; }
+.release-notes .rel-h { color: var(--text); font-weight: 600; margin-top: 12px; }
+.release-notes .rel-li { padding-left: 6px; }
+
 @media (max-width: 720px) {
   .hero h1 { font-size: 30px; }
   .hero h1 .accent { font-size: 20px; }
