@@ -28,6 +28,18 @@ maintainer starts "Release (version)" → patch | minor | major
         → publishes the GitHub Release
 ```
 
+## Current release status
+
+| | |
+| --- | --- |
+| Latest release | **v0.1.1** — https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.1.1 |
+| Assets | installer, portable zip, model package, `latest.yml`, `SHA256SUMS.txt` |
+| GPU runtime | **not included** — the hosted `windows-latest` runner has no CUDA toolkit, so this release ships the CPU runtime only |
+| Code signing | **none** — see [Code-signing status](#code-signing-status) |
+
+`v0.1.0` is an earlier, non-distributable release (source archives only). Use
+`v0.1.1` or newer.
+
 ## How to create a patch release
 
 A patch release is a bug fix: `0.1.0 → 0.1.1`.
@@ -38,6 +50,10 @@ A patch release is a bug fix: `0.1.0 → 0.1.1`.
 4. `release_type`: **patch**.
 5. Run it. The workflow commits `Release 0.1.1`, tags `v0.1.1`, and builds and
    publishes the release.
+
+The CUDA build step reports in the job summary whether the GPU runtime was built
+for that release. If the runner has no CUDA toolkit, the release ships the CPU
+runtime and the summary says so.
 
 ## How to create a minor release
 
