@@ -5,6 +5,26 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A second recording in the same case failed with
+  `UNIQUE constraint failed: segments.segment_id`.** The ASR engine numbers its
+  segments from zero for every recording, and `segments.segment_id` was the
+  single-column primary key, so two transcripts in one case collided. The key is
+  now `(transcript_id, segment_id)` — a segment id is only unique within its
+  transcript — and a migration rebuilds the table for existing databases copying
+  every row unchanged. Generated ids are also prefixed with a per-run id so they
+  are unique by construction.
+- **The sidebar counts showed a stale snapshot.** It read `0 cases · 0 files`
+  while the case list beside it already listed cases and files; the counts now
+  recompute whenever the case list refreshes.
+- **"Data folder" opened an unrelated directory picker.** It now opens the real
+  data folder and is labelled "Open data folder".
+- **The export folder was hard to find.** The export dialog now has an
+  "Open exports folder" button, and after an export the app asks whether to open
+  it. Export file names include the evidence id, so two recordings with the same
+  file name no longer overwrite each other's exports.
+
 ## [0.1.2] - 2026-10-03
 
 ### Fixed
