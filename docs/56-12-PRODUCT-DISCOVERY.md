@@ -10,19 +10,32 @@ document is the input to a later, separately approved roadmap.
 
 ## 1. Executive summary
 
-The application is now operationally sound on a real Windows machine for the
-core 56.12 flow: install, update, model setup, case creation, multi-evidence
-import, transcription, review, edit, export. Three consecutive real-world
-blockers (dead renderer, destroyed automatic text, multi-evidence id collision)
-have been found and fixed, each with a new permanent regression gate.
+The application has been exercised end to end on a **real Windows x64 machine**
+by the maintainer. On v0.1.3 the following are **validated on real hardware**:
+application startup, model installation and use, case creation, evidence import,
+transcription, review/edit/save/export, and the **automatic-update happy path**
+(v0.1.2 → v0.1.3). Three consecutive real-world blockers were found by that
+real-hardware testing and fixed, each with a new permanent regression gate:
+
+- **v0.1.1** — the renderer crashed on startup (dead UI). *Found in the real
+  Windows test.*
+- **v0.1.2** — an expert edit destroyed the automatic transcript. *Found in the
+  real Windows test.*
+- **v0.1.3** — a second recording in the same case collided on
+  `segments.segment_id`. *Found after the real Windows test, using a
+  multi-evidence case.*
+
+Careful wording: "validated on real Windows" above means the happy path of each
+listed flow was exercised once by the maintainer. It does **not** mean failure,
+recovery, rollback, power-loss or scale behaviour has been validated.
 
 This audit makes four arguments.
 
-1. **The product is functionally correct but not yet reliability-hardened.** The
-   serious risks are no longer "does it work" but "can it lose or corrupt a
-   case". There is no backup/archive, no integrity check, no crash-recovery
-   story, and `synchronous` is not set on the database. For a tool whose output
-   becomes evidence, this is the highest-value gap.
+1. **The product works, but is not yet reliability-hardened.** The serious risks
+   are no longer "does it work" but "can it lose or corrupt a case". There is no
+   backup/archive, no integrity check, no crash-recovery story, and
+   `synchronous` is not set on the database. For a tool whose output feeds an
+   expert's work, this is the highest-value gap.
 
 2. **The scope boundary is now well defined by the primary source.** The
    Ministry of Justice Bilirkişilik Daire Başkanlığı lists **56.12 "Ses
@@ -39,13 +52,32 @@ This audit makes four arguments.
    European, and switching would require a human-verified Turkish corpus that
    does not yet exist. The correct move is to *measure*, not to switch.
 
-4. **The biggest unknowns are all human.** No real 56.12 practitioner has
-   validated the workflow; there is no human-verified Turkish corpus; the
-   target hardware (RTX 3060) and the live auto-update path have not been
-   exercised on real hardware.
+4. **The biggest unknowns are all human and all failure-path.** No real 56.12
+   practitioner has validated the workflow; there is no human-verified Turkish
+   corpus; auto-update failure/recovery/rollback is unvalidated; and the target
+   hardware (RTX 3060) has not been exercised.
 
 The recommended next step is **reliability and integrity work (P0), then core
 workflow depth (P1)** — not new capability.
+
+### 1.1 Real-hardware validation status (precise)
+
+| Flow | Real Windows x64 | Notes |
+| --- | --- | --- |
+| Application startup | **Validated** | v0.1.3 |
+| Model installation and use | **Validated** | v0.1.3 |
+| Case creation | **Validated** | v0.1.3 |
+| Evidence import | **Validated** | v0.1.3 |
+| Transcription | **Validated** | v0.1.3 |
+| Review / edit / save / export | **Validated** | v0.1.3 |
+| Automatic update (happy path) | **Validated once** | v0.1.2 → v0.1.3 |
+| Automatic update failure / recovery / rollback | **Not validated** | no test yet |
+| Power loss / forced termination | **Not validated** | no test yet |
+| Multi-evidence at scale (100+) | **Not validated** | 10 recordings validated |
+| RTX 3060 / CUDA runtime | **Not validated** | no CUDA runtime in the release |
+
+"Validated" means the maintainer exercised the flow successfully. It does not
+mean the flow has automated regression coverage for its failure paths.
 
 ---
 
@@ -207,7 +239,7 @@ static GitHub Pages portal.
 
 | # | Item | Evidence |
 | --- | --- | --- |
-| E1 | **The privacy statement is inaccurate.** README and `docs/security.md` say the only outbound call is the model download, but the packaged app also checks GitHub Releases ~8 s after startup (`updater.js` `checkForUpdates`) | README vs `main.js:359` |
+| E1 | **The privacy statement was inaccurate** and has been corrected: README and `docs/security.md` now disclose that the packaged app checks GitHub Releases for updates shortly after startup, in addition to the model download. Originally the docs said the model download was the only outbound call (`updater.js` `checkForUpdates`, `main.js:359`) | fixed in this PR |
 | E2 | Updater traffic reveals "this machine runs Forensic Transcriber" and an IP to GitHub; acceptable but must be disclosed | updater |
 | E3 | The logger writes error entries to a local log; a renderer console error could embed a file path or transcript fragment | `console-message` capture |
 | E4 | No log redaction policy is documented | `logger.js` |
@@ -238,8 +270,12 @@ static GitHub Pages portal.
 
 ## 3. Current product capabilities
 
-Verified on the packaged artifact and, for the core flow, on a real Windows
-machine by the maintainer:
+All items below are verified on the packaged artifact. On **v0.1.3 on a real
+Windows x64 machine**, the maintainer additionally validated: application
+startup, model installation and use, case creation, evidence import,
+transcription, review/edit/save/export, and the automatic-update happy path
+(v0.1.2 → v0.1.3). Failure, recovery, rollback, power-loss and 100+-evidence
+scale are **not** yet validated.
 
 - Windows x64 installer, portable zip, offline model package, auto-update.
 - Local transcription with whisper.cpp (large-v3-turbo q5_0), Silero VAD,
@@ -507,7 +543,7 @@ acceptance test.
 | P0-3 | **Atomic writes** for exports and DB-adjacent files | Interrupted export leaves a partial file | C3 | Write temp + fsync + rename | S | none | core | low | Interrupt export; only complete files present |
 | P0-4 | **Crash-safe migration** | A schema rebuild with no backup risks the whole DB | B4 | Copy the DB before a rebuild; verify after | S | none | core | low | Simulate crash mid-migration; DB opens |
 | P0-5 | **Evidence re-verification** | The recorded hash is never re-checked | C1 | Verify evidence hashes on case open; flag drift | S | none | core | low | Tamper a file; app flags it |
-| P0-6 | **Fix the privacy statement** | Docs claim the only outbound call is the model download, but the updater also checks at startup | E1 | Correct README/security to disclose the startup update check; offer a setting to disable | S | improves | core | low | Docs match code; disabling prevents the call |
+| P0-6 | **Privacy statement accuracy** | Docs claimed the only outbound call is the model download, but the updater also checks at startup | E1 | **Done in this PR:** README and security now disclose the startup update check; a setting to disable it is still open | S | improves | core | low | Docs match code; disabling prevents the call |
 
 ### P1 — core 56.12 workflow
 

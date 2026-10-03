@@ -86,9 +86,12 @@ desktop UI (Electron)  →  local SQLite case store
                        →  transcript editor  →  JSON / TXT / SRT / HTML
 ```
 
-All inference and all data stay on the machine. The only outbound network call in the
-whole application is the explicit, checksum-verified model download you trigger from the
-Models dialog. See [Architecture](docs/architecture.md) and
+All inference and all data stay on the machine. The application makes exactly two
+kinds of outbound call, both to GitHub over HTTPS and both optional: the
+explicit, checksum-verified **model download** you trigger from the Models
+dialog, and the **update check** the packaged Windows build performs shortly
+after startup (and whenever you press *Check for updates*). There is no other
+network activity. See [Architecture](docs/architecture.md) and
 [Methodology](docs/methodology.md).
 
 ## Quick start (end user)
@@ -198,13 +201,15 @@ Validation is reported in three separate tiers. Do not read one tier as another.
 
 | Gate | Result |
 | --- | --- |
-| Lint | 0 problems (35 files) |
-| Unit tests | 42/42 pass |
+| Lint | 0 problems (47 files) |
+| Unit tests | 119/119 pass |
 | Integration tests — pipeline + timestamp contract | 4/4 pass |
 | Integration tests — red-team / hostile input | 15/15 pass |
+| Integration tests — update data safety | 4/4 pass |
 | Security check | 0 critical findings |
-| Packaged smoke test | 11/11 steps |
-| Packaged acceptance test | 20/20 steps |
+| Packaged smoke test | 19/19 steps |
+| Packaged acceptance test | 31/31 steps |
+| Packaged multi-evidence test (10 recordings) | 19/19 steps |
 
 Accuracy figures in this repository come from a **synthetic benchmark** (espeak-ng TTS
 audio), not a human corpus. They are labelled as such and must not be read as

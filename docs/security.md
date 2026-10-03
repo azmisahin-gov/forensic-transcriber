@@ -6,9 +6,16 @@
 - **No account, no login.** There is no user system.
 - **No cloud.** Cases are stored on the local machine only.
 - **No audio upload.** Recordings are never sent anywhere.
-- **Offline-first.** The application performs no network activity during normal
-  operation. The only outbound call is the explicit model download you trigger,
-  and it verifies a SHA-256 before accepting the file.
+- **Offline-first.** The application performs no network activity beyond two
+  optional, user-visible functions, both to GitHub over HTTPS:
+  1. the explicit **model download** you trigger, which verifies a SHA-256 before
+     accepting the file, and
+  2. the **update check** the packaged Windows build performs shortly after
+     startup (and whenever you press *Check for updates*). It only reports
+     whether a newer version exists; nothing is downloaded or installed without
+     your action.
+
+  No other module makes a network call.
 
 `scripts/security-check.js` enforces these properties at release time: it fails
 if a telemetry dependency appears, if a network API is used outside the model

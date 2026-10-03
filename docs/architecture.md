@@ -99,10 +99,12 @@ hostile file producing unbounded output.
 
 ## Offline-first
 
-The application performs no network activity during normal operation. The only
-outbound call is the explicit model download in `model-manager.js`, which
-verifies a SHA-256 before accepting a file. `scripts/security-check.js` enforces
-that no other module uses a network API.
+The application performs no network activity beyond two optional, user-visible
+functions, both to GitHub over HTTPS: the explicit model download in
+`model-manager.js`, which verifies a SHA-256 before accepting a file, and the
+update check in `updater.js` (electron-updater), which only reports whether a
+newer version exists and never downloads or installs without the user's action.
+`scripts/security-check.js` enforces that no other module uses a network API.
 
 ## Where the code lives
 
