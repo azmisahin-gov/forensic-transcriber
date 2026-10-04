@@ -259,3 +259,28 @@ test('local assist is disabled by default, makes no network call, and reports ho
   assert.equal(result.ok, false);
   assert.equal(result.code, 'AI_DISABLED');
 });
+
+test('enabling the local draft collector is explicit and still makes no network call', async () => {
+  const dir = tmp();
+  const storage = new Storage(dir);
+  const { kase, ev } = await seed(storage, dir);
+  storage.saveTranscript(kase.case_id, ev.evidence_id, { segments: [seg('S1', 0, 'merhaba')] });
+  storage.createFinding(kase.case_id, { title: 'Bulgu A', observation: 'gözlem', evidenceId: ev.evidence_id });
+
+  // Off by default: generate refuses and the draft is not built.
+  const off = aiAssist.generate({ storage, caseId: kase.case_id, action: 'report-draft' });
+  assert.equal(off.ok, false);
+  assert.equal(off.code, 'AI_DISABLED');
+
+  // Enabled explicitly (the persisted preference is read by the main process):
+  // the result is the operator's own records, never machine-authored prose.
+  const on = aiAssist.generate({ storage, caseId: kase.case_id, action: 'report-draft', state: { enabled: true } });
+  assert.equal(on.ok, true);
+  assert.equal(on.draft.origin, 'assembled-from-operator-records');
+  assert.equal(on.draft.requires_expert_review, true);
+  assert.equal(on.draft.network, undefined);
+  assert.equal(on.draft.transcripts.length, 1);
+  assert.equal(on.draft.findings.length, 1);
+  assert.equal(on.draft.findings[0].title, 'Bulgu A');
+  storage.close();
+});
