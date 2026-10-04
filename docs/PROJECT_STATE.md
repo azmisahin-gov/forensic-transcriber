@@ -1,8 +1,8 @@
 # Project state
 
-CURRENT_PHASE: P1 design + analysis layer — delivered (PR #22 merged to `main`, released as 0.4.0); PR-7/PR-8 follow-up committed on `p1-pr7-pr8-studio-completion`
-CURRENT_STATUS: IN PROGRESS — PR-7 (technical run records + operations centre + Ctrl+K search) and PR-8 (offline draft-collector surface + delivery/final-review surface) implemented and covered by unit tests; Windows CI for this branch not yet run
-LAST_UPDATED: 2026-10-03
+CURRENT_PHASE: P1 design + analysis layer — complete. PR-1…PR-8 all merged to `main` (PR #22, PR #23); PR-7/PR-8 verified end-to-end on Linux.
+CURRENT_STATUS: RELEASING 0.5.0 — every local release gate passed on Linux (lint, 225 unit, 0 critical security findings, 31 integration, packaged smoke + 60-step acceptance, engine capability) and `main` CI is green; the **Release (version)** workflow is being dispatched for the minor bump. Windows packaged launch and target-NVIDIA GPU behaviour remain **NOT VERIFIED** (no Windows host, no GPU here).
+LAST_UPDATED: 2026-10-04
 
 ## P1 design + analysis layer
 
@@ -57,35 +57,44 @@ Committed so far:
   readiness checklist and hand-off outputs and offers the UYAP-ready folder
   action with an explicit no-login/no-upload/no-signature note.
 
-### Verified for this branch
+### Verified for this release (0.5.0, on `main`)
+
+Fresh run on 2026-10-04 in the Linux build environment (Debian trixie, Node
+24.21.0, host FFmpeg 7.1.5, whisper.cpp v1.9.4 built from pinned source,
+`ggml-large-v3-turbo-q5_0.bin` + `ggml-silero-v5.1.2.bin` checksum-verified):
 
 - `npm run lint` → Lint OK — 72 files checked.
-- `npm run test:unit` → **225 passed / 225 total**, 0 fail, 0 skip (the 5
-  previously-skipped tests need FFmpeg, which was installed on the host).
+- `npm run test:unit` → **225 passed / 225 total**, 0 fail, 0 skip.
 - `node scripts/security-check.js` → 0 critical findings.
-- Integration (with system FFmpeg + bundled whisper-cli): `FT_FFMPEG_PATH=
-  /usr/bin/ffmpeg FT_FFPROBE_PATH=/usr/bin/ffprobe FT_WHISPER_CLI_PATH=
-  vendor/linux-x64/bin/whisper-cli node --test tests/integration/*.test.js` →
-  **31/31** passed, 0 fail, 0 skip.
+- Integration (host FFmpeg + `whisper-cli` built from v1.9.4 source):
+  `FT_FFMPEG_PATH=/usr/bin/ffmpeg FT_FFPROBE_PATH=/usr/bin/ffprobe
+  FT_WHISPER_CLI_PATH=<repo>/build/whisper.cpp/build-static/bin/whisper-cli
+  FT_TEST_MODEL=…/ggml-large-v3-turbo-q5_0.bin FT_TEST_VAD=…/ggml-silero-v5.1.2.bin
+  node --test tests/integration/*.test.js` → **31/31** passed, 0 fail, 0 skip.
 - Packaged smoke test (`--smoke-test`, headless, freshly repackaged
   `release/linux-unpacked`): `ok:true`, all steps pass, `unwired: 0`.
-- Packaged acceptance test (`--acceptance-test`, 60 steps incl. the new
+- Packaged acceptance test (`--acceptance-test`, **60 steps** incl. the
   technical-runs, operations-centre, Ctrl+K, delivery and draft-collector
   steps): `ok:true`, 0 failed.
-- `npm run verify:release` (full gate, `--models-dir` default, system FFmpeg):
-  **10/10 gates passed — Release gate met** (lint, unit, security, versioning,
-  integration, package, packaged smoke, packaged acceptance, engine capability).
+- `npm run verify:release` (full gate, default `--models-dir`, host FFmpeg,
+  whisper-cli built from source): **10/10 gates passed — Release gate met**
+  (lint, unit, security, SemVer, lockfile, integration, package, packaged smoke,
+  packaged acceptance, engine capability). The engine report shows the CPU
+  runtime only (`gpu runtime not bundled`, run mode `cpu`).
+- `main` CI is green: `CI` run on `c9d0591` (push, `main`) — Linux unit,
+  **Windows unit (`test-windows`)**, and packaged smoke all **success**.
 
-### Not yet verified for this branch
+### Not yet verified (honest limitations)
 
-- Windows CI for this branch has not run (the branch is not pushed). Windows-only
-  behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
-  therefore **NOT VERIFIED** for this branch; the packaged tests above ran on
-  Linux only.
+- **Windows packaged launch / installer.** The Windows installer and portable
+  are produced by the `windows-latest` release job; no Windows runtime was
+  available here to launch them. Windows unit tests pass on CI, but the packaged
+  Windows launch is **NOT VERIFIED**.
 - Real RTX 3060 GPU verification is not possible in this environment. The engine
   report shows the CPU runtime only (`gpu runtime not bundled`, run mode cpu);
   GPU capability / selection / actual use are reported separately and never
-  conflated.
+  conflated → **NOT VERIFIED on target NVIDIA hardware**.
+- Accuracy figures are a synthetic benchmark, not a human corpus.
 
 ## P15 — delivery (merged + released)
 
