@@ -5,6 +5,38 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Technical pre-review run records.** The technical view now lists the case's
+  real `transcription_runs` (engine + version, model id + SHA-256, runtime mode
+  and reason, VAD, status, error code, start/finish) from `cases.runs`. This is
+  a software traceability record, not a chain of custody; no authenticity or
+  legal characterization is produced.
+- **Operations centre.** A header "İşlemler" dialog consolidates the case's
+  transcription runs and any in-flight evidence import, with real counts. The
+  cancel control is shown only while a transcription is genuinely busy — there
+  is no fake cancellation for jobs that run to completion.
+- **Search navigation (Ctrl+K).** Ctrl+K opens the case search palette and a
+  result opens its recording and moves the playhead and highlighted row to the
+  exact segment (or timestamp) of the hit.
+- **Local draft collector surface.** The Report dialog exposes the offline
+  draft collector behind an explicit, persisted opt-in (`ai_assist_enabled`,
+  off by default). When enabled it collects the operator's own records
+  (revision states, unresolved segments, findings) into a clearly-marked draft;
+  it makes no network call and never writes into the report by itself.
+- **Delivery / final-review surface.** The delivery dialog shows the real
+  readiness checklist and the hand-off outputs, and offers the UYAP-ready
+  folder action with an explicit note that it performs no login, upload or
+  e-signature automation.
+
+### Changed
+
+- `assist.generate()` accepts an explicit `state` so the persisted preference
+  is honored by the main process instead of a module constant.
+- The packaged `--acceptance-test` now includes steps for the technical run
+  list, the operations centre, the Ctrl+K search palette, the delivery surface
+  and the default-off draft collector.
+
 ## [0.4.0] - 2026-10-04
 
 ### Added

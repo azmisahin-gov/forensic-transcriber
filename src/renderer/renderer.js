@@ -218,7 +218,7 @@
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
       'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
-      'btn-report-apply-template',
+      'btn-report-apply-template', 'btn-operations', 'btn-ops-refresh',
       'select-locale', 'btn-theme-light', 'btn-theme-dark',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
@@ -1087,6 +1087,68 @@
       grid.appendChild(wrap);
     }
     body.appendChild(grid);
+    renderRuns();
+  }
+
+  /**
+   * Run records for the case. This is observation only: it lists what the
+   * engine reported for each run (engine/version, model, runtime mode and
+   * reason, status, error code, timestamps) plus the artifact counts the run
+   * produced. It is a software traceability record, not a chain of custody, and
+   * it draws no authenticity or legal conclusion.
+   */
+  async function renderRuns() {
+    const ul = $('#technical-runs');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!state.caseRecord) return;
+    let runs = [];
+    try {
+      runs = await call(api.cases.runs(state.caseRecord.case_id, null));
+    } catch {
+      runs = [];
+    }
+    if (!runs.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('technical.noRuns');
+      ul.appendChild(li);
+      return;
+    }
+    for (const run of runs) {
+      const li = document.createElement('li');
+      li.className = 'technical-run';
+      const head = document.createElement('div');
+      head.className = 'run-head';
+      const engine = document.createElement('span');
+      engine.className = 'run-engine';
+      engine.textContent = [run.engine, run.engine_version].filter(Boolean).join(' ') || '—';
+      const status = document.createElement('span');
+      status.className = `rev-state ${String(run.status || '').toLowerCase()}`;
+      status.textContent = run.status || '—';
+      head.append(engine, status);
+      const rows = [
+        [t('technical.runStarted'), run.started_at ? relativeTime(run.started_at) : '—'],
+        [t('technical.runFinished'), run.finished_at ? relativeTime(run.finished_at) : '—'],
+        [t('technical.runModel'), [run.model_id, run.model_sha256 ? run.model_sha256.slice(0, 12) : null].filter(Boolean).join(' · ') || '—'],
+        [t('technical.runRuntime'), [run.runtime_mode, run.runtime_reason].filter(Boolean).join(' · ') || '—'],
+        [t('technical.runVad'), run.vad ? t('common.yes') : t('common.no')],
+        [t('technical.runError'), run.error_code || '—'],
+      ];
+      const dl = document.createElement('dl');
+      dl.className = 'run-grid';
+      for (const [k, v] of rows) {
+        const w = document.createElement('div');
+        const dt = document.createElement('dt');
+        dt.textContent = k;
+        const dd = document.createElement('dd');
+        dd.textContent = v;
+        w.append(dt, dd);
+        dl.appendChild(w);
+      }
+      li.append(head, dl);
+      ul.appendChild(li);
+    }
   }
 
   // ------------------------------------------------------------- case intake
@@ -1222,6 +1284,77 @@
     await renderReportTemplates();
     await refreshChecklist();
     await renderReportRevisions();
+    await refreshAiAssist();
+  }
+
+  /**
+   * The local draft collector is disabled by default and makes no network call.
+   * The checkbox reflects the persisted preference; enabling it only lets the
+   * operator gather their own records (findings, revision states, unresolved
+   * segments) into a clearly-marked draft. It never invents text and never
+   * enters the report without the expert's own editing.
+   */
+  async function refreshAiAssist() {
+    const chk = $('#chk-ai-assist');
+    const statusEl = $('#report-ai-status');
+    try {
+      const st = await call(api.ai.status());
+      if (chk) chk.checked = Boolean(st.enabled);
+      if (statusEl) statusEl.textContent = st.enabled ? t('report.aiOn') : t('report.aiOff');
+    } catch {
+      if (statusEl) statusEl.textContent = '';
+    }
+  }
+
+  async function setAiAssist(enabled) {
+    try {
+      await call(api.preferences.set('ai_assist_enabled', Boolean(enabled)));
+    } catch {
+      /* best effort; the status refresh below reflects the real value */
+    }
+    await refreshAiAssist();
+  }
+
+  async function collectAiDraft() {
+    if (!state.caseRecord) return;
+    const ul = $('#report-ai-draft');
+    const statusEl = $('#report-ai-status');
+    if (!ul) return;
+    try {
+      const res = await call(api.ai.generate({ caseId: state.caseRecord.case_id, action: 'report-draft' }));
+      if (!res || res.ok !== true) {
+        ul.classList.add('hidden');
+        if (statusEl) statusEl.textContent = t('report.aiUnavailable');
+        return;
+      }
+      ul.innerHTML = '';
+      const draft = res.draft || {};
+      const header = document.createElement('li');
+      header.className = 'ai-draft-head';
+      header.textContent = t('report.aiDraftHead');
+      ul.appendChild(header);
+      for (const row of draft.transcripts || []) {
+        const li = document.createElement('li');
+        li.className = 'ai-draft-row';
+        li.textContent = `${row.evidence_name} · ${t('report.aiRev')}: ${row.revision_state || '—'} · ${row.unresolved_segments}/${row.segment_count} ${t('report.aiUnresolved')}`;
+        ul.appendChild(li);
+      }
+      for (const f of draft.findings || []) {
+        const li = document.createElement('li');
+        li.className = 'ai-draft-row';
+        li.textContent = `${t('finding.title')}: ${f.title}`;
+        ul.appendChild(li);
+      }
+      const foot = document.createElement('li');
+      foot.className = 'ai-draft-foot muted small';
+      foot.textContent = t('report.aiDraftFoot');
+      ul.appendChild(foot);
+      ul.classList.remove('hidden');
+      if (statusEl) statusEl.textContent = '';
+    } catch (err) {
+      ul.classList.add('hidden');
+      if (statusEl) statusEl.textContent = `${t('report.aiUnavailable')}`;
+    }
   }
 
   // Template choice changes the section skeleton. Applying a template appends a
@@ -1505,7 +1638,7 @@
         if (hit.evidence_id) {
           li.appendChild(actionButton(t('search.open'), async () => {
             $('#dialog-search').close();
-            await selectEvidence(hit.evidence_id);
+            await openSearchHit(hit);
           }));
         }
         ul.appendChild(li);
@@ -1516,6 +1649,97 @@
       li.textContent = `${t('error.search')}: ${errText(err)}`;
       ul.appendChild(li);
     }
+  }
+
+  /**
+   * Navigate to a search result: open the evidence it belongs to, then move the
+   * playhead and the highlighted segment to the exact hit. A segment hit lands
+   * on its own row; other hits (note/finding/evidence) open the recording.
+   */
+  async function openSearchHit(hit) {
+    await selectEvidence(hit.evidence_id);
+    const segmentId = hit.segment_id || null;
+    if (segmentId && state.store && state.store.getById(segmentId)) {
+      state.activeSegmentId = segmentId;
+      const seg = state.store.getById(segmentId);
+      if (seg) {
+        audio.seek(seg.start);
+        renderTranscript();
+        renderWaveform();
+        scrollSegmentIntoView(segmentId);
+      }
+    } else if (hit.at_seconds != null) {
+      audio.seek(Number(hit.at_seconds));
+      renderWaveform();
+    }
+  }
+
+  // --------------------------------------------------------- operations centre
+  /**
+   * The operations centre shows the case's real runs — there is no synthetic
+   * progress here. A running transcription can be cancelled (the cancel IPC is
+   * real); a finished run is only listed. Evidence import runs to completion and
+   * exposes no cancel, so no cancel control is shown for it.
+   */
+  async function openOperations() {
+    if (!state.caseRecord) return;
+    $('#dialog-operations').showModal();
+    await renderOperations();
+  }
+
+  async function renderOperations() {
+    const ul = $('#ops-list');
+    if (!ul) return;
+    ul.innerHTML = '';
+    if (!state.caseRecord) return;
+    let runs = [];
+    try {
+      runs = await call(api.cases.runs(state.caseRecord.case_id, null));
+    } catch {
+      runs = [];
+    }
+    const items = runs.slice(0, 20).map((run) => ({
+      kind: 'transcription',
+      status: run.status,
+      label: [run.engine, run.engine_version].filter(Boolean).join(' ') || t('ops.transcription'),
+      detail: run.finished_at ? relativeTime(run.finished_at) : run.started_at ? relativeTime(run.started_at) : '',
+    }));
+    if (state.importActive || state.importQueue.length) {
+      const done = state.importQueue.filter((i) => i.stage === 'complete').length;
+      const failed = state.importQueue.filter((i) => i.stage === 'failed').length;
+      items.unshift({
+        kind: 'import',
+        status: state.importActive ? 'RUNNING' : failed ? 'FAILED' : 'SUCCEEDED',
+        label: t('ops.import'),
+        detail: `${done + failed} / ${state.importQueue.length}`,
+      });
+    }
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('ops.none');
+      ul.appendChild(li);
+    } else {
+      for (const item of items) {
+        const li = document.createElement('li');
+        li.className = 'ops-row';
+        const label = document.createElement('span');
+        label.className = 'ops-label';
+        label.textContent = item.label;
+        const status = document.createElement('span');
+        status.className = `rev-state ${String(item.status || '').toLowerCase()}`;
+        status.textContent = item.status || '—';
+        const detail = document.createElement('span');
+        detail.className = 'muted small';
+        detail.textContent = item.detail || '';
+        li.append(label, status, detail);
+        ul.appendChild(li);
+      }
+    }
+    // The cancel control is only enabled when a transcription is genuinely in
+    // flight; otherwise it is hidden so it never promises a cancel it cannot do.
+    const cancelBtn = $('#btn-ops-cancel');
+    if (cancelBtn) cancelBtn.classList.toggle('hidden', !state.busy);
   }
 
   async function prepareUyap() {
@@ -1543,6 +1767,66 @@
     } catch (err) {
       toast(`${t('error.delivery')}: ${errText(err)}`, 'error');
     }
+  }
+
+  /**
+   * Delivery / final-review surface. The checklist is the same readiness data the
+   * report dialog shows, and the outputs list names what a hand-off contains. It
+   * is honest about scope: no UYAP login, upload or e-signature automation — only
+   * a local folder of UYAP-ready files.
+   */
+  async function openDelivery() {
+    if (!state.caseRecord) return;
+    $('#dialog-delivery').showModal();
+    await refreshDelivery();
+  }
+
+  async function refreshDelivery() {
+    const cl = $('#delivery-checklist');
+    const out = $('#delivery-outputs');
+    if (!cl || !out) return;
+    cl.innerHTML = '';
+    out.innerHTML = '';
+    let checklist = null;
+    try {
+      checklist = await call(api.report.checklist(state.caseRecord.case_id));
+    } catch {
+      checklist = null;
+    }
+    if (checklist && Array.isArray(checklist.items)) {
+      for (const item of checklist.items) {
+        const li = document.createElement('li');
+        const stateEl = document.createElement('span');
+        const cls = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        stateEl.className = `state ${cls}`;
+        stateEl.textContent = item.manual ? 'manual' : item.status === 'ok' ? 'ok' : 'pending';
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        li.append(stateEl, label);
+        cl.appendChild(li);
+      }
+    } else {
+      const li = document.createElement('li');
+      li.className = 'muted small';
+      li.textContent = t('delivery.noChecklist');
+      cl.appendChild(li);
+    }
+    const outputs = [
+      ['report', t('delivery.outReport')],
+      ['transcripts', t('delivery.outTranscripts')],
+      ['metadata', t('delivery.outMetadata')],
+      ['archive', t('delivery.outArchive')],
+    ];
+    for (const [, label] of outputs) {
+      const li = document.createElement('li');
+      li.className = 'delivery-output';
+      li.textContent = label;
+      out.appendChild(li);
+    }
+    const note = document.createElement('li');
+    note.className = 'muted small';
+    note.textContent = t('delivery.uyapNote');
+    out.appendChild(note);
   }
 
   // ---------------------------------------------------------------- support
@@ -2427,8 +2711,12 @@
     bind('#btn-findings', 'click', openFindings);
     bind('#btn-report', 'click', openReport);
     bind('#btn-search', 'click', openCaseSearch);
+    bind('#btn-operations', 'click', openOperations);
+    bind('#btn-ops-refresh', 'click', renderOperations);
+    bind('#btn-ops-cancel', 'click', cancelTranscription);
     bind('#btn-uyap', 'click', prepareUyap);
-    bind('#btn-delivery', 'click', () => $('#dialog-delivery').showModal());
+    bind('#btn-delivery', 'click', openDelivery);
+    bind('#btn-delivery-uyap', 'click', prepareUyap);
     bind('#btn-support', 'click', () => $('#dialog-support').showModal());
     bind('#btn-edit-case', 'click', openCaseEdit);
     bind('#btn-add-note', 'click', addNote);
@@ -2437,6 +2725,8 @@
     bind('#btn-report-build', 'click', refreshChecklist);
     bind('#btn-report-export', 'click', exportReport);
     bind('#btn-report-apply-template', 'click', applyReportTemplate);
+    bind('#btn-report-ai-draft', 'click', collectAiDraft);
+    bind('#chk-ai-assist', 'change', (e) => setAiAssist(e.target.checked));
 
     // Language selection. Default is Turkish; switching re-renders the static
     // markup and the dynamic lists without reloading the window.
@@ -2657,7 +2947,10 @@
         }
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openCaseSearch();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         saveTranscript();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && e.shiftKey) {

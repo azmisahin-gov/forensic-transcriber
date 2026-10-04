@@ -39,8 +39,8 @@ function status(state = DEFAULT_STATE) {
  *
  * @returns {{ok:boolean, code?:string, draft?:object}}
  */
-function generate({ storage, caseId, evidenceId = null, action = 'report-draft' } = {}) {
-  if (!DEFAULT_STATE.enabled) {
+function generate({ storage, caseId, evidenceId = null, action = 'report-draft', state = DEFAULT_STATE } = {}) {
+  if (!state || !state.enabled) {
     return { ok: false, code: 'AI_DISABLED', message: 'Local assist is disabled.' };
   }
   if (action !== 'report-draft') {

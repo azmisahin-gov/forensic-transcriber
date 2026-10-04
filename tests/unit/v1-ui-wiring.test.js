@@ -84,6 +84,55 @@ test('the analysis view is wired to the analysis IPC APIs', () => {
   assert.ok(RENDERER_JS.includes('markPassage'), 'renderer.js must define the mark-critical action');
 });
 
+// --------------------------------------------------- technical + operations
+test('the technical view lists run records from the real runs API', () => {
+  assert.ok(INDEX_HTML.includes('id="technical-runs"'), 'index.html must contain #technical-runs');
+  assert.ok(INDEX_HTML.includes('data-i18n="technical.runsHeading"'), 'technical view must label the run section');
+  assert.ok(RENDERER_JS.includes('api.cases.runs'), 'renderer.js must read runs via api.cases.runs');
+  assert.ok(RENDERER_JS.includes('function renderRuns'), 'renderer.js must define renderRuns');
+});
+
+test('the operations centre is wired to real runs and honest cancellation', () => {
+  for (const id of ['btn-operations', 'dialog-operations', 'ops-list', 'btn-ops-cancel', 'btn-ops-refresh']) {
+    assert.ok(INDEX_HTML.includes(`id="${id}"`), `index.html must contain #${id}`);
+  }
+  assert.ok(RENDERER_JS.includes('function openOperations'), 'renderer.js must define openOperations');
+  assert.ok(RENDERER_JS.includes('function renderOperations'), 'renderer.js must define renderOperations');
+  // The cancel control must be shown only when a transcription is genuinely busy.
+  assert.match(RENDERER_JS, /btn-ops-cancel[\s\S]{0,160}state\.busy/, 'cancel must be gated on real state.busy');
+});
+
+test('Ctrl+K opens the case search palette and search hits navigate to the segment', () => {
+  assert.match(RENDERER_JS, /key\.toLowerCase\(\) === 'k'[\s\S]{0,120}openCaseSearch/, 'Ctrl+K must open case search');
+  assert.ok(RENDERER_JS.includes('function openSearchHit'), 'renderer.js must define openSearchHit');
+  assert.match(RENDERER_JS, /openSearchHit[\s\S]{0,600}scrollSegmentIntoView/, 'a search hit must scroll to its segment');
+});
+
+// --------------------------------------------------------- AI + delivery
+test('the local draft assist is opt-in, offline and never auto-writes the report', () => {
+  for (const id of ['chk-ai-assist', 'btn-report-ai-draft', 'report-ai-status', 'report-ai-draft']) {
+    assert.ok(INDEX_HTML.includes(`id="${id}"`), `index.html must contain #${id}`);
+  }
+  // Enabling it is an explicit, persisted preference (never on by default).
+  assert.ok(RENDERER_JS.includes("api.preferences.set('ai_assist_enabled'"), 'the assist toggle must persist its choice');
+  assert.match(RENDERER_JS, /setAiAssist[\s\S]{0,200}ai_assist_enabled/, 'setAiAssist must write the preference');
+  // Collecting a draft only displays it; it must not call report.save.
+  const collectFn = RENDERER_JS.slice(
+    RENDERER_JS.indexOf('async function collectAiDraft'),
+    RENDERER_JS.indexOf('async function collectAiDraft') + 1600
+  );
+  assert.ok(!collectFn.includes('api.report.save'), 'collecting a draft must never save into the report');
+});
+
+test('the delivery surface links to the checklist and UYAP-ready output', () => {
+  for (const id of ['delivery-checklist', 'delivery-outputs', 'btn-delivery-uyap']) {
+    assert.ok(INDEX_HTML.includes(`id="${id}"`), `index.html must contain #${id}`);
+  }
+  assert.ok(RENDERER_JS.includes('function openDelivery'), 'renderer.js must define openDelivery');
+  assert.ok(RENDERER_JS.includes('function refreshDelivery'), 'renderer.js must define refreshDelivery');
+  assert.ok(RENDERER_JS.includes('api.report.checklist'), 'the delivery checklist must reuse the real checklist API');
+});
+
 // --------------------------------------------------------------- public site
 test('the public site is Turkish-first with an optional English block', () => {
   assert.match(SITE_HTML, /<html lang="tr">/, 'the site default language must be Turkish');

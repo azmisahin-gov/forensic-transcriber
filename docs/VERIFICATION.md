@@ -18,6 +18,32 @@ build environment.
 | FFmpeg / FFprobe | 7.1.5 (host, integration tests) |
 | whisper.cpp | v1.9.4, built from pinned source |
 
+## 0. Branch verification — P1 PR-7 / PR-8 (`p1-pr7-pr8-studio-completion`)
+
+All commands below were run on 2026-10-03 in the Linux build environment
+(FFmpeg 7.1.5 installed on the host; `vendor/linux-x64` ffmpeg lacks its shared
+libraries, so `FT_FFMPEG_PATH`/`FT_FFPROBE_PATH` point at the host binaries).
+
+| Command | Result |
+| --- | --- |
+| `npm run lint` | Lint OK — 72 files checked |
+| `npm run test:unit` | 225 passed, 0 failed, 0 skipped |
+| `npm test` (unit + integration, host FFmpeg) | 256 passed, 0 failed, 0 skipped |
+| `node scripts/security-check.js` | 0 critical findings |
+| `node --test tests/integration/*.test.js` (with FFmpeg + whisper-cli) | 31 passed, 0 failed, 0 skipped |
+| `verify:release.js` packaged smoke (fresh `release/linux-unpacked`) | `ok:true`, `unwired: 0` |
+| `verify:release.js` packaged acceptance | `ok:true`, 60 steps, 0 failed |
+| `npm run verify:release` (full gate) | **10/10 gates passed — Release gate met** |
+
+The acceptance run's new steps exercise the real IPC data behind the PR-7/PR-8
+surfaces: `cases.runs` returns the run list, the operations centre renders run
+rows, Ctrl+K opens the search palette, the delivery dialog renders the real
+checklist and outputs, and the draft collector reports `AI_DISABLED` by default
+while leaving the report sections byte-identical.
+
+NOT VERIFIED for this branch: Windows CI (branch not pushed) and real RTX 3060
+GPU behaviour (no NVIDIA hardware); the engine report shows the CPU runtime only.
+
 ## 1. Unit tests
 
 Command: `node --test tests/unit/*.test.js`

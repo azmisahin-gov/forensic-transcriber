@@ -1,12 +1,14 @@
 # Project state
 
-CURRENT_PHASE: P1 design + analysis layer (branch `design/p1-light-theme-accents`, not merged)
-CURRENT_STATUS: IN PROGRESS — theme, studio shell, expert analysis layer (schema 7, archive v3), analysis workspace wiring and Report Studio (expert 56.12 template) committed and covered by unit tests
+CURRENT_PHASE: P1 design + analysis layer — delivered (PR #22 merged to `main`, released as 0.4.0); PR-7/PR-8 follow-up committed on `p1-pr7-pr8-studio-completion`
+CURRENT_STATUS: IN PROGRESS — PR-7 (technical run records + operations centre + Ctrl+K search) and PR-8 (offline draft-collector surface + delivery/final-review surface) implemented and covered by unit tests; Windows CI for this branch not yet run
 LAST_UPDATED: 2026-10-03
 
-## P1 design + analysis layer (branch `design/p1-light-theme-accents`)
+## P1 design + analysis layer
 
-Work in progress on a dedicated branch. The approved plan is PR-1…PR-8.
+The approved plan is PR-1…PR-8. PR-1…PR-6 were merged to `main` via PR #22
+(merge commit `3f3d1b8`) and released as **0.4.0** (tag `v0.4.0`, commit
+`78d4e06`). PR-7 and PR-8 are committed on `p1-pr7-pr8-studio-completion`.
 
 Committed so far:
 
@@ -40,25 +42,50 @@ Committed so far:
   entered text and no prior revision is lost. The checklist gains expert items
   (contexted passages, sourced claims, uncertainty) that only gate `ready` for
   the expert template.
+- **PR-7 — technical run records + operations centre + Ctrl+K search.** The
+  technical view lists the case's real `transcription_runs` (engine, model,
+  runtime mode/reason, VAD, status, error, timestamps) as software traceability,
+  not a chain of custody. A header "İşlemler" dialog consolidates runs and
+  in-flight import with real counts and only offers cancel while a transcription
+  is genuinely busy. Ctrl+K opens the search palette; a hit opens its recording
+  and moves the playhead and highlighted row to the exact segment/timestamp.
+- **PR-8 — offline draft-collector surface + delivery/final-review surface.**
+  The Report dialog exposes the offline draft collector behind an explicit,
+  persisted opt-in (`ai_assist_enabled`, off by default); it collects the
+  operator's own records into a clearly-marked draft, makes no network call, and
+  never writes into the report by itself. The delivery dialog shows the real
+  readiness checklist and hand-off outputs and offers the UYAP-ready folder
+  action with an explicit no-login/no-upload/no-signature note.
 
 ### Verified for this branch
 
-- `node --test tests/unit/*.test.js` → **219/219** unit tests passed, 0 fail,
-  0 skip (includes the new `p1-report-template.test.js`).
 - `npm run lint` → Lint OK — 72 files checked.
+- `npm run test:unit` → **225 passed / 225 total**, 0 fail, 0 skip (the 5
+  previously-skipped tests need FFmpeg, which was installed on the host).
 - `node scripts/security-check.js` → 0 critical findings.
-- Integration: `FT_WHISPER_CLI_PATH=... FT_TEST_MODEL=... FT_TEST_VAD=... node
-  --test tests/integration/*.test.js` → **31/31** passed, 0 skip.
-- Packaged smoke: `xvfb-run -a electron . --smoke-test --no-sandbox` → ok true
-  (all steps, including ffmpeg/ffprobe available and case create/persist).
+- Integration (with system FFmpeg + bundled whisper-cli): `FT_FFMPEG_PATH=
+  /usr/bin/ffmpeg FT_FFPROBE_PATH=/usr/bin/ffprobe FT_WHISPER_CLI_PATH=
+  vendor/linux-x64/bin/whisper-cli node --test tests/integration/*.test.js` →
+  **31/31** passed, 0 fail, 0 skip.
+- Packaged smoke test (`--smoke-test`, headless, freshly repackaged
+  `release/linux-unpacked`): `ok:true`, all steps pass, `unwired: 0`.
+- Packaged acceptance test (`--acceptance-test`, 60 steps incl. the new
+  technical-runs, operations-centre, Ctrl+K, delivery and draft-collector
+  steps): `ok:true`, 0 failed.
+- `npm run verify:release` (full gate, `--models-dir` default, system FFmpeg):
+  **10/10 gates passed — Release gate met** (lint, unit, security, versioning,
+  integration, package, packaged smoke, packaged acceptance, engine capability).
 
 ### Not yet verified for this branch
 
 - Windows CI for this branch has not run (the branch is not pushed). Windows-only
   behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
-  therefore **NOT VERIFIED** for this branch.
-- PR-7 (technical screen + operations centre + Ctrl+K search) and PR-8 (passive
-  AI surface, delivery/UYAP UI, full i18n, docs) are not implemented yet.
+  therefore **NOT VERIFIED** for this branch; the packaged tests above ran on
+  Linux only.
+- Real RTX 3060 GPU verification is not possible in this environment. The engine
+  report shows the CPU runtime only (`gpu runtime not bundled`, run mode cpu);
+  GPU capability / selection / actual use are reported separately and never
+  conflated.
 
 ## P15 — delivery (merged + released)
 

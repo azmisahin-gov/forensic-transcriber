@@ -254,6 +254,31 @@ html, body {
 .technical-grid div { display: flex; flex-direction: column; gap: 2px; }
 .technical-grid dt { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
 .technical-grid dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-all; }
+.technical-section { padding: 4px 20px 18px; }
+.technical-section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); margin: 10px 0 6px; }
+.technical-runs { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.technical-run { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg-3); }
+.technical-run .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.technical-run .run-engine { font-size: 13px; font-weight: 600; }
+.technical-run .run-head .rev-state { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
+.technical-run .run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 18px; margin: 0; }
+.technical-run .run-grid div { display: flex; flex-direction: column; gap: 1px; }
+.technical-run .run-grid dt { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
+.technical-run .run-grid dd { margin: 0; font-family: var(--mono); font-size: 11.5px; word-break: break-word; }
+
+.ops-list { list-style: none; margin: 8px 0 12px; padding: 0; max-height: 44vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.ops-row { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg-3); display: flex; align-items: center; gap: 10px; }
+.ops-row .ops-label { flex: 1; font-size: 13px; }
+.ops-row .rev-state { flex: 0 0 auto; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
+.ops-actions { display: flex; gap: 8px; margin-bottom: 6px; }
+
+.report-ai-row { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; flex-wrap: wrap; }
+.ai-draft-list { list-style: none; margin: 6px 0 10px; padding: 8px 10px; border: 1px dashed var(--border-2); border-radius: 8px; background: var(--bg-3); display: flex; flex-direction: column; gap: 4px; }
+.ai-draft-list .ai-draft-head { font-size: 12px; font-weight: 600; }
+.ai-draft-list .ai-draft-row { font-size: 12px; color: var(--text-dim); }
+.delivery-outputs { list-style: none; margin: 6px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.delivery-outputs .delivery-output { font-size: 12.5px; padding-left: 14px; position: relative; }
+.delivery-outputs .delivery-output::before { content: '•'; position: absolute; left: 0; color: var(--text-mute); }
 
 /* Clickable workflow step */
 .wf-step { cursor: pointer; }
