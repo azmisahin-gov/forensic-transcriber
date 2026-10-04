@@ -5,6 +5,48 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Expert analysis layer (schema_version 7).** Passages, claims, sources and
+  verifications live in their own tables, separate from the transcript. A
+  passage anchors to the exact transcript revision it was taken from, requires a
+  positive context window (the surrounding seconds), and is validated against a
+  fixed speech-act / confidence vocabulary. A claim keeps `as_stated` (what was
+  said) and `alleged_meaning` (what is claimed) as distinct fields; a source and
+  a verification record how the claim was checked. This layer never merges the
+  machine transcript with expert work.
+- **Archive v3.** The case archive now carries the analysis layer and the case
+  history log. Restore writes a new case, re-verifies every evidence hash, and
+  remaps `old id → new id` across evidence, runs, transcripts, revisions,
+  findings, passages, claims, sources and verifications, plus the ids referenced
+  by each history entry, so the provenance graph survives the round-trip.
+- **Analysis workspace page.** The analysis view lists passages, the claim
+  matrix and external sources, each row anchored to its revision; a segment can
+  be marked critical from the studio, and a passage can be turned into a claim.
+- **Expert (56.12) report template.** A ten-section skeleton
+  (`reports.js` → `TEMPLATES.expert`) that keeps the machine transcript in its
+  own `Doğrulanmış Transkript` section and renders the expert analysis in
+  separate `Kritik Pasajlar`, `İddia–Kanıt Matrisi` and
+  `Teknik Sonuç ve Belirsizlikler` sections. Auto-population adds the engine
+  record, per-evidence SHA-256 integrity, audio stream properties, a
+  time-sorted timeline, every critical passage with its context window and
+  source revision, the claim-evidence matrix with linked sources, and the
+  legal-scope boundary line. A report can be switched to the expert template
+  from the Report dialog (`report.templates` / `report.save`); the skeleton
+  merges with the current draft so entered text is not discarded and prior
+  report revisions stay readable.
+- **Regression coverage** in `tests/unit/p1-analysis.test.js` (passage context,
+  claim field separation, enum validation, archive v3 round-trip with remapped
+  ids, non-overwriting restore, schema 7), in
+  `tests/unit/p1-report-template.test.js` (expert skeleton, machine/expert
+  section separation, context window, claim matrix with linked sources,
+  legal-scope line, template UI wiring) and in `tests/unit/v1-ui-wiring.test.js`
+  (analysis preload APIs and view wiring).
+
+### Changed
+
+- Archive `archive_version` bumped to **3**; v1 and v2 archives remain readable.
+
 ## [0.3.0] - 2026-10-03
 
 ### Added

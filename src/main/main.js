@@ -302,7 +302,18 @@ async function buildReportForCase(caseId) {
     report,
     integrity,
     dashboard,
+    analysis: collectAnalysis(caseId),
   });
+}
+
+/** Gather the expert analysis graph for the report, without mutating it. */
+function collectAnalysis(caseId) {
+  return {
+    passages: storage.listPassages(caseId),
+    claims: storage.listClaims(caseId),
+    sources: storage.listSources(caseId),
+    verifications: storage.listVerifications(caseId),
+  };
 }
 
 
@@ -758,7 +769,7 @@ function registerIpc() {
     const integrity = await verifyEvidenceIntegrity(evidence);
     const report = storage.getReport(caseId);
     const dashboard = storage.caseDashboard(caseId);
-    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard });
+    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard, analysis: collectAnalysis(caseId) });
   });
 
   // Render the report to the requested formats, written to a folder the user
@@ -842,6 +853,52 @@ function registerIpc() {
   });
   handle(IPC.FINDING_UPDATE, async (_e, findingId, patch) => storage.updateFinding(findingId, patch || {}));
   handle(IPC.FINDING_DELETE, async (_e, findingId) => storage.deleteFinding(findingId));
+
+  // Expert analysis layer. Every call is case-scoped; passages require a context
+  // window, and the context reader only ever reads stored transcript text.
+  handle(IPC.PASSAGE_LIST, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listPassages(caseId);
+  });
+  handle(IPC.PASSAGE_CREATE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.createPassage(caseId, payload || {});
+  });
+  handle(IPC.PASSAGE_UPDATE, async (_e, passageId, patch) => storage.updatePassage(passageId, patch || {}));
+  handle(IPC.PASSAGE_DELETE, async (_e, passageId) => storage.deletePassage(passageId));
+  handle(IPC.CLAIM_LIST, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listClaims(caseId);
+  });
+  handle(IPC.CLAIM_CREATE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.createClaim(caseId, payload || {});
+  });
+  handle(IPC.CLAIM_UPDATE, async (_e, claimId, patch) => storage.updateClaim(claimId, patch || {}));
+  handle(IPC.CLAIM_DELETE, async (_e, claimId) => storage.deleteClaim(claimId));
+  handle(IPC.SOURCE_LIST, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listSources(caseId);
+  });
+  handle(IPC.SOURCE_CREATE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.createSource(caseId, payload || {});
+  });
+  handle(IPC.SOURCE_UPDATE, async (_e, sourceId, patch) => storage.updateSource(sourceId, patch || {}));
+  handle(IPC.SOURCE_DELETE, async (_e, sourceId) => storage.deleteSource(sourceId));
+  handle(IPC.VERIFICATION_LIST, async (_e, caseId) => {
+    requireCase(caseId);
+    return storage.listVerifications(caseId);
+  });
+  handle(IPC.VERIFICATION_CREATE, async (_e, caseId, payload) => {
+    requireCase(caseId);
+    return storage.createVerification(caseId, payload || {});
+  });
+  handle(IPC.VERIFICATION_UPDATE, async (_e, verificationId, patch) => storage.updateVerification(verificationId, patch || {}));
+  handle(IPC.VERIFICATION_DELETE, async (_e, verificationId) => storage.deleteVerification(verificationId));
+  handle(IPC.ANALYSIS_CONTEXT, async (_e, evidenceId, startSeconds, endSeconds, windowSeconds) =>
+    storage.getAnalysisContext(evidenceId, startSeconds, endSeconds, windowSeconds)
+  );
 
   // Windowed transcript reads for virtualised rendering of long recordings.
   handle(IPC.TRANSCRIPT_PAGE, async (_e, transcriptId, options = {}) =>

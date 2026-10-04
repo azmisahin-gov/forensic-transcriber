@@ -74,6 +74,44 @@
   const TRANSCRIPT_SCHEMA_VERSION = '1.0';
   const CASE_SCHEMA_VERSION = '1.0';
 
+  // Expert analysis layer. It is deliberately separate from the transcript: a
+  // passage is anchored to a revision (never raw ASR) and always carries a
+  // context window so an isolated quote can never be promoted to a finding.
+  const SPEECH_ACT = Object.freeze({
+    LITERAL: 'LITERAL',
+    HYPOTHETICAL: 'HYPOTHETICAL',
+    CHARACTER: 'CHARACTER',
+    QUOTATION: 'QUOTATION',
+    IRONY: 'IRONY',
+    PUNCHLINE: 'PUNCHLINE',
+    EVENT: 'EVENT',
+    REALITY_CLAIM: 'REALITY_CLAIM',
+    ATTRIBUTION: 'ATTRIBUTION',
+  });
+  const SPEECH_ACT_VALUES = Object.freeze(Object.values(SPEECH_ACT));
+
+  const PASSAGE_CONFIDENCE = Object.freeze({ HIGH: 'HIGH', MEDIUM: 'MEDIUM', LOW: 'LOW' });
+  const PASSAGE_CONFIDENCE_VALUES = Object.freeze(Object.values(PASSAGE_CONFIDENCE));
+
+  const VERIFICATION_STATUS = Object.freeze({
+    VERIFIED: 'VERIFIED',
+    NOT_VERIFIABLE: 'NOT_VERIFIABLE',
+    PENDING: 'PENDING',
+  });
+  const VERIFICATION_STATUS_VALUES = Object.freeze(Object.values(VERIFICATION_STATUS));
+
+  const SOURCE_KIND = Object.freeze({
+    PRIMARY: 'PRIMARY',
+    REFERENCE: 'REFERENCE',
+    SECONDARY: 'SECONDARY',
+  });
+  const SOURCE_KIND_VALUES = Object.freeze(Object.values(SOURCE_KIND));
+
+  // Default context window (seconds) around a passage. The operator may widen
+  // it, but it is never zero: a passage without context is not admissible.
+  const PASSAGE_CONTEXT_SECONDS = 30;
+  const PASSAGE_CONTEXT_OPTIONS = Object.freeze([30, 60]);
+
   const HISTORY_ACTIONS = Object.freeze({
     CASE_CREATED: 'CASE_CREATED',
     EVIDENCE_IMPORTED: 'EVIDENCE_IMPORTED',
@@ -88,6 +126,14 @@
     TRANSCRIPTION_STARTED: 'TRANSCRIPTION_STARTED',
     TRANSCRIPTION_FAILED: 'TRANSCRIPTION_FAILED',
     TRANSCRIPTION_CANCELLED: 'TRANSCRIPTION_CANCELLED',
+    PASSAGE_CREATED: 'PASSAGE_CREATED',
+    PASSAGE_DELETED: 'PASSAGE_DELETED',
+    CLAIM_CREATED: 'CLAIM_CREATED',
+    CLAIM_DELETED: 'CLAIM_DELETED',
+    SOURCE_CREATED: 'SOURCE_CREATED',
+    SOURCE_DELETED: 'SOURCE_DELETED',
+    VERIFICATION_RECORDED: 'VERIFICATION_RECORDED',
+    VERIFICATION_DELETED: 'VERIFICATION_DELETED',
   });
 
   const SUPPORTED_EXTENSIONS = Object.freeze([
@@ -164,6 +210,23 @@
     AI_GENERATE: 'ai:generate',
     PREF_ALL: 'pref:all',
     PREF_SET: 'pref:set',
+    PASSAGE_LIST: 'passage:list',
+    PASSAGE_CREATE: 'passage:create',
+    PASSAGE_UPDATE: 'passage:update',
+    PASSAGE_DELETE: 'passage:delete',
+    CLAIM_LIST: 'claim:list',
+    CLAIM_CREATE: 'claim:create',
+    CLAIM_UPDATE: 'claim:update',
+    CLAIM_DELETE: 'claim:delete',
+    SOURCE_LIST: 'source:list',
+    SOURCE_CREATE: 'source:create',
+    SOURCE_UPDATE: 'source:update',
+    SOURCE_DELETE: 'source:delete',
+    VERIFICATION_LIST: 'verification:list',
+    VERIFICATION_CREATE: 'verification:create',
+    VERIFICATION_UPDATE: 'verification:update',
+    VERIFICATION_DELETE: 'verification:delete',
+    ANALYSIS_CONTEXT: 'analysis:context',
     DIAGNOSTICS_LIST: 'diagnostics:list',
     DIAGNOSTICS_RECORD: 'diagnostics:record',
     SUPPORT_BUNDLE: 'support:bundle',
@@ -171,6 +234,13 @@
     DIALOG_SAVE_FILE: 'dialog:saveFile',
     DIALOG_OPEN_DIRECTORY: 'dialog:openDirectory',
   });
+
+  // Local UI appearance. Stored as preferences and applied to the document
+  // root; light is the default so a first launch is readable in a bright office.
+  const THEMES = Object.freeze({ LIGHT: 'light', DARK: 'dark' });
+  const THEME_VALUES = Object.freeze(Object.values(THEMES));
+  const ACCENTS = Object.freeze({ BLUE: 'blue', TEAL: 'teal', INDIGO: 'indigo' });
+  const ACCENT_VALUES = Object.freeze(Object.values(ACCENTS));
 
   return {
     SEGMENT_STATUS,
@@ -183,6 +253,20 @@
     REVIEW_FLAGS,
     REVIEW_FLAG_VALUES,
     NOTE_KIND,
+    SPEECH_ACT,
+    SPEECH_ACT_VALUES,
+    PASSAGE_CONFIDENCE,
+    PASSAGE_CONFIDENCE_VALUES,
+    VERIFICATION_STATUS,
+    VERIFICATION_STATUS_VALUES,
+    SOURCE_KIND,
+    SOURCE_KIND_VALUES,
+    PASSAGE_CONTEXT_SECONDS,
+    PASSAGE_CONTEXT_OPTIONS,
+    THEMES,
+    THEME_VALUES,
+    ACCENTS,
+    ACCENT_VALUES,
     UNCLEAR_PLACEHOLDER,
     TRANSCRIPT_SCHEMA_VERSION,
     CASE_SCHEMA_VERSION,

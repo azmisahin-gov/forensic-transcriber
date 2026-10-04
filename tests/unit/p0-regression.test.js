@@ -28,6 +28,7 @@ const {
   buildCaseArchive,
   restoreCaseArchive,
   verifyCaseArchive,
+  ARCHIVE_VERSION,
 } = require('../../src/main/services/case-archive');
 
 function tmp() {
@@ -153,7 +154,7 @@ test('archive restore preserves runs, revisions and their provenance', async () 
   const srcHistory = storage.listHistory(kase.case_id).length;
 
   const { buffer, manifest } = await buildCaseArchive({ storage, caseId: kase.case_id });
-  assert.equal(manifest.archive_version, 2);
+  assert.equal(manifest.archive_version, ARCHIVE_VERSION);
   assert.equal(manifest.counts.transcript_revisions, srcRevisions.length);
   assert.equal(manifest.counts.transcription_runs, srcRuns.length);
 

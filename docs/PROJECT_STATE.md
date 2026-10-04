@@ -1,8 +1,64 @@
 # Project state
 
-CURRENT_PHASE: P15 — delivery of professionalization v1 (merged + released)
-CURRENT_STATUS: DELIVERED — merged to main and released as v0.3.0; Linux CI/package gates and Windows unit CI passed
+CURRENT_PHASE: P1 design + analysis layer (branch `design/p1-light-theme-accents`, not merged)
+CURRENT_STATUS: IN PROGRESS — theme, studio shell, expert analysis layer (schema 7, archive v3), analysis workspace wiring and Report Studio (expert 56.12 template) committed and covered by unit tests
 LAST_UPDATED: 2026-10-03
+
+## P1 design + analysis layer (branch `design/p1-light-theme-accents`)
+
+Work in progress on a dedicated branch. The approved plan is PR-1…PR-8.
+
+Committed so far:
+
+- **PR-1 — light-first theme with a user-selectable accent.** Light is the
+  default; dark is optional; the accent (blue/teal/indigo) is user-selectable.
+  Visually checked by capturing the real renderer headlessly.
+- **PR-2 — expert studio shell + step routing.** An eight-step workflow stepper
+  (Görevlendirme → Teslim) plus a view router (assignment/studio/analysis/
+  technical) that shows exactly one page at a time.
+- **PR-3 — expert analysis layer (schema_version 7).** Passages, claims, sources
+  and verifications, each anchored to a transcript revision and kept strictly
+  separate from the machine transcript. A passage requires a positive context
+  window; a claim keeps what was said (`as_stated`) distinct from the alleged
+  meaning (`alleged_meaning`). The case archive was extended to **v3** so this
+  layer and the case history log round-trip through restore with explicit
+  `old id → new id` remapping; v1 and v2 archives stay readable. Restore still
+  writes a new case and never overwrites the source.
+- **PR-5 — analysis workspace wiring.** The analysis page is reachable from the
+  studio; a segment can be marked critical (creating a context-windowed passage
+  anchored to the current transcript revision) and a passage can be promoted to a
+  claim with an external source and a verification status.
+- **PR-6 — Report Studio + expert (56.12) template.** A ten-section expert
+  template keeps the machine transcript (`Doğrulanmış Transkript`) separate from
+  the expert reading (`Kritik Pasajlar`, `İddia–Kanıt Matrisi`,
+  `Teknik Sonuç ve Belirsizlikler`). The report auto-populates the engine record,
+  per-evidence SHA-256 integrity, audio properties, a time-sorted timeline, the
+  critical passages with their context windows and source revisions, and the
+  claim-evidence matrix with linked sources, and always prints the legal-scope
+  boundary. The template is selectable in the Report dialog; applying one merges
+  the skeleton with the current draft and appends a report revision, so no
+  entered text and no prior revision is lost. The checklist gains expert items
+  (contexted passages, sourced claims, uncertainty) that only gate `ready` for
+  the expert template.
+
+### Verified for this branch
+
+- `node --test tests/unit/*.test.js` → **219/219** unit tests passed, 0 fail,
+  0 skip (includes the new `p1-report-template.test.js`).
+- `npm run lint` → Lint OK — 72 files checked.
+- `node scripts/security-check.js` → 0 critical findings.
+- Integration: `FT_WHISPER_CLI_PATH=... FT_TEST_MODEL=... FT_TEST_VAD=... node
+  --test tests/integration/*.test.js` → **31/31** passed, 0 skip.
+- Packaged smoke: `xvfb-run -a electron . --smoke-test --no-sandbox` → ok true
+  (all steps, including ffmpeg/ffprobe available and case create/persist).
+
+### Not yet verified for this branch
+
+- Windows CI for this branch has not run (the branch is not pushed). Windows-only
+  behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
+  therefore **NOT VERIFIED** for this branch.
+- PR-7 (technical screen + operations centre + Ctrl+K search) and PR-8 (passive
+  AI surface, delivery/UYAP UI, full i18n, docs) are not implemented yet.
 
 ## P15 — delivery (merged + released)
 

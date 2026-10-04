@@ -9,6 +9,7 @@
   const { drawWaveform, resamplePeaks, xToTime } = FT_WAVEFORM;
   const { FILTERS, filterSegments, highlightParts } = FT_SEARCH;
   const { translate, normalize: normalizeLocale, DEFAULT_LOCALE } = FT_I18N;
+  const { apply: applyTheme, normalizeTheme, normalizeAccent } = FT_THEME;
 
   const FLAG_OPTIONS = ['UNCLEAR', 'REVISIT', 'REVIEW'];
 
@@ -18,6 +19,8 @@
   const state = {
     appInfo: null,
     locale: DEFAULT_LOCALE,
+    theme: normalizeTheme('light'),
+    accent: normalizeAccent('blue'),
     cases: [],
     caseRecord: null,
     evidence: [],
@@ -36,8 +39,13 @@
     engineProbe: null,
     lastRunMode: null,
     dashboard: null,
+    activeView: 'studio',
     notes: [],
     findings: [],
+    passages: [],
+    claims: [],
+    sources: [],
+    verifications: [],
     report: null,
     revisions: [],
     searchQuery: '',
@@ -68,6 +76,33 @@
         if (attr && key) el.setAttribute(attr, t(key));
       }
     }
+  }
+
+  // ------------------------------------------------------------- appearance
+  /** Reflect the active theme/accent on the document root and the switches. */
+  function renderPrefControls() {
+    const applied = applyTheme(document.documentElement, { theme: state.theme, accent: state.accent });
+    state.theme = applied.theme;
+    state.accent = applied.accent;
+    const light = $('#btn-theme-light');
+    const dark = $('#btn-theme-dark');
+    if (light) light.classList.toggle('active', state.theme === 'light');
+    if (dark) dark.classList.toggle('active', state.theme === 'dark');
+    for (const dot of document.querySelectorAll('.accent-dots button[data-accent]')) {
+      dot.classList.toggle('active', dot.getAttribute('data-accent') === state.accent);
+    }
+  }
+
+  async function setTheme(theme) {
+    state.theme = normalizeTheme(theme);
+    renderPrefControls();
+    try { await call(api.preferences.set('theme', state.theme)); } catch { /* best-effort */ }
+  }
+
+  async function setAccent(accent) {
+    state.accent = normalizeAccent(accent);
+    renderPrefControls();
+    try { await call(api.preferences.set('accent', state.accent)); } catch { /* best-effort */ }
   }
 
   async function setLocale(locale) {
@@ -146,9 +181,12 @@
     try {
       const prefs = await call(api.preferences.all());
       if (prefs && prefs.locale) state.locale = normalizeLocale(prefs.locale);
+      if (prefs && prefs.theme) state.theme = normalizeTheme(prefs.theme);
+      if (prefs && prefs.accent) state.accent = normalizeAccent(prefs.accent);
     } catch {
       /* preferences are optional */
     }
+    renderPrefControls();
     applyTranslations();
     const localeSel = $('#select-locale');
     if (localeSel) localeSel.value = state.locale;
@@ -172,7 +210,7 @@
    * wired to handlers. A crashed renderer leaves this object absent or failed.
    */
   function markBootReady() {
-    const requiredGlobals = ['FT_CONSTANTS', 'FT_I18N', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM', 'FT_SEARCH'];
+    const requiredGlobals = ['FT_CONSTANTS', 'FT_I18N', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM', 'FT_SEARCH', 'FT_THEME'];
     const missingGlobals = requiredGlobals.filter((name) => typeof window[name] === 'undefined');
     const requiredControls = [
       'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
@@ -180,7 +218,8 @@
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
       'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
-      'select-locale',
+      'btn-report-apply-template',
+      'select-locale', 'btn-theme-light', 'btn-theme-dark',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -645,10 +684,12 @@
       renderEvidenceList();
       showReview(null);
       renderCaseList();
+      setActiveView('studio');
       $('#btn-save').disabled = true;
       $('#btn-export').disabled = true;
       reportIntegrity(data.integrity, data.databaseHealth);
       await refreshDashboard();
+      await loadAnalysis();
     } catch (err) {
       toast(`${t('case.openFailed')}: ${errText(err)}`, 'error');
     }
@@ -717,25 +758,35 @@
    * The eight-step expert workflow (Görevlendirme → Teslim). Step status is
    * derived from the live dashboard counts so it always matches the case, and
    * the first step that still has work is marked as the current step.
+   *
+   * Steps are clickable and route to a view; the mapping keeps the existing
+   * single-studio layout for the transcription/review steps and adds dedicated
+   * pages for assignment, analysis and technical review.
    */
+  function workflowSteps() {
+    const d = state.dashboard;
+    return [
+      { n: '01', label: t('workflow.01'), status: !d ? 'pending' : d.missing_assignment_fields === 0 ? 'done' : 'current', view: 'assignment' },
+      { n: '02', label: t('workflow.02'), status: !d || d.evidence === 0 ? 'current' : 'done', view: 'studio' },
+      { n: '03', label: t('workflow.03'), status: !d || d.evidence === 0 ? 'pending' : d.transcribed === d.evidence ? 'done' : 'current', view: 'studio' },
+      { n: '04', label: t('workflow.04'), status: !d || d.transcribed === 0 ? 'pending' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current', view: 'studio' },
+      { n: '05', label: t('workflow.05'), status: !d || d.transcribed === 0 ? 'pending' : d.unclear_segments > 0 ? 'warn' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current', view: 'analysis' },
+      { n: '06', label: t('workflow.06'), status: !d ? 'pending' : d.has_report ? 'done' : d.transcribed > 0 ? 'current' : 'pending', view: 'technical' },
+      { n: '07', label: t('workflow.07'), status: !d ? 'pending' : d.failed_runs > 0 ? 'warn' : d.has_report ? 'current' : 'pending', view: 'studio' },
+      { n: '08', label: t('workflow.08'), status: !d ? 'pending' : d.deliveries > 0 ? 'done' : d.has_report ? 'current' : 'pending', view: 'studio' },
+    ];
+  }
+
   function renderWorkflow() {
     const ol = $('#workflow-list');
     if (!ol) return;
     ol.innerHTML = '';
-    const d = state.dashboard;
-    const steps = [
-      { n: '01', label: t('workflow.01'), status: !d ? 'pending' : d.missing_assignment_fields === 0 ? 'done' : 'current' },
-      { n: '02', label: t('workflow.02'), status: !d || d.evidence === 0 ? 'current' : 'done' },
-      { n: '03', label: t('workflow.03'), status: !d || d.evidence === 0 ? 'pending' : d.transcribed === d.evidence ? 'done' : 'current' },
-      { n: '04', label: t('workflow.04'), status: !d || d.transcribed === 0 ? 'pending' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
-      { n: '05', label: t('workflow.05'), status: !d || d.transcribed === 0 ? 'pending' : d.unclear_segments > 0 ? 'warn' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
-      { n: '06', label: t('workflow.06'), status: !d ? 'pending' : d.has_report ? 'done' : d.transcribed > 0 ? 'current' : 'pending' },
-      { n: '07', label: t('workflow.07'), status: !d ? 'pending' : d.failed_runs > 0 ? 'warn' : d.has_report ? 'current' : 'pending' },
-      { n: '08', label: t('workflow.08'), status: !d ? 'pending' : d.deliveries > 0 ? 'done' : d.has_report ? 'current' : 'pending' },
-    ];
-    for (const step of steps) {
+    for (const step of workflowSteps()) {
       const li = document.createElement('li');
       li.className = `wf-step ${step.status}`;
+      li.dataset.view = step.view;
+      li.tabIndex = 0;
+      li.title = step.label;
       const num = document.createElement('span');
       num.className = 'wf-num';
       num.textContent = step.n;
@@ -746,8 +797,296 @@
       badge.className = 'wf-badge';
       badge.textContent = t(`workflow.${step.status === 'current' ? 'current' : step.status === 'warn' ? 'warn' : step.status === 'done' ? 'done' : 'pending'}`);
       li.append(num, label, badge);
+      const go = () => setActiveView(step.view);
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          go();
+        }
+      });
       ol.appendChild(li);
     }
+    for (const li of document.querySelectorAll('#workflow-list .wf-step')) {
+      li.classList.toggle('active', li.dataset.view === state.activeView);
+    }
+  }
+
+  /** Switch the visible case page. Views are additive; the studio stays default. */
+  function setActiveView(view) {
+    const known = ['assignment', 'studio', 'analysis', 'technical'];
+    state.activeView = known.includes(view) ? view : 'studio';
+    for (const page of document.querySelectorAll('.case-view-page')) {
+      page.classList.toggle('hidden', page.id !== `view-${state.activeView}`);
+    }
+    for (const li of document.querySelectorAll('#workflow-list .wf-step')) {
+      li.classList.toggle('active', li.dataset.view === state.activeView);
+    }
+    if (state.activeView === 'analysis') renderAnalysis();
+    if (state.activeView === 'technical') renderTechnical();
+  }
+
+  // Analysis page. Passages are taken from a selected transcript segment with an
+  // explicit context window; claims separate the words that were said from the
+  // meaning that is alleged; sources record how a claim was checked. Every row is
+  // anchored to the transcript revision it came from, so a later machine run
+  // cannot silently re-attach it to different text.
+  const VERIFICATION_LABELS = { PENDING: 'PENDING', VERIFIED: 'VERIFIED', NOT_VERIFIABLE: 'NOT_VERIFIABLE' };
+
+  async function loadAnalysis() {
+    if (!state.caseRecord) return;
+    try {
+      const [passages, claims, sources, verifications] = await Promise.all([
+        call(api.passages.list(state.caseRecord.case_id)),
+        call(api.claims.list(state.caseRecord.case_id)),
+        call(api.sources.list(state.caseRecord.case_id)),
+        call(api.verifications.list(state.caseRecord.case_id)),
+      ]);
+      state.passages = passages;
+      state.claims = claims;
+      state.sources = sources;
+      state.verifications = verifications;
+    } catch (err) {
+      state.passages = [];
+      state.claims = [];
+      state.sources = [];
+      state.verifications = [];
+    }
+    renderAnalysis();
+  }
+
+  function renderAnalysis() {
+    const passagesList = $('#passages-list');
+    const claimsList = $('#claims-list');
+    const sourcesList = $('#sources-list');
+    if (!passagesList || !claimsList || !sourcesList) return;
+    passagesList.innerHTML = '';
+    claimsList.innerHTML = '';
+    sourcesList.innerHTML = '';
+
+    for (const p of state.passages) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const time = document.createElement('button');
+      time.className = 'ts';
+      time.textContent = formatClock(p.start_seconds);
+      time.title = t('player.playFromHere');
+      time.addEventListener('click', () => playSpan(p.start_seconds, p.end_seconds));
+      const meta = document.createElement('span');
+      meta.className = 'muted small';
+      meta.textContent = `${p.speech_act} · ${p.confidence} · ±${p.context_before_seconds}s`;
+      head.append(time, meta);
+      const text = document.createElement('div');
+      text.className = 'analysis-row-body';
+      text.textContent = p.text || '—';
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      actions.append(
+        actionButton(t('analysis.createClaim'), () => createClaimFromPassage(p), null, 'claim'),
+        actionButton(t('analysis.delete'), async () => {
+          try {
+            await call(api.passages.remove(p.passage_id));
+            state.passages = state.passages.filter((x) => x.passage_id !== p.passage_id);
+            renderAnalysis();
+            toast(t('analysis.passageDeleted'), 'success');
+          } catch (err) {
+            toast(`${t('error.findingDelete')}: ${errText(err)}`, 'error');
+          }
+        }, null, 'delete')
+      );
+      li.append(head, text, actions);
+      passagesList.appendChild(li);
+    }
+
+    for (const c of state.claims) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const stated = document.createElement('span');
+      stated.className = 'analysis-as-stated';
+      stated.textContent = `${t('analysis.asStated')}: ${c.as_stated || '—'}`;
+      const badge = document.createElement('span');
+      badge.className = `status ${c.verification === 'VERIFIED' ? 'VERIFIED' : c.verification === 'NOT_VERIFIABLE' ? 'REVIEWED' : 'AUTOMATIC'}`;
+      badge.textContent = c.verification;
+      head.append(stated, badge);
+      const meaning = document.createElement('div');
+      meaning.className = 'analysis-row-body';
+      meaning.textContent = `${t('analysis.allegedMeaning')}: ${c.alleged_meaning || '—'}`;
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      const vSelect = document.createElement('select');
+      vSelect.className = 'input input-small';
+      for (const v of Object.keys(VERIFICATION_LABELS)) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        if (v === c.verification) opt.selected = true;
+        vSelect.appendChild(opt);
+      }
+      vSelect.addEventListener('change', async () => {
+        try {
+          const updated = await call(api.claims.update(c.claim_id, { verification: vSelect.value }));
+          Object.assign(c, updated);
+          renderAnalysis();
+        } catch (err) {
+          toast(`${errText(err)}`, 'error');
+        }
+      });
+      actions.append(
+        vSelect,
+        actionButton(t('analysis.addSource'), () => addSourceToClaim(c), null, 'source'),
+        actionButton(t('analysis.delete'), async () => {
+          try {
+            await call(api.claims.remove(c.claim_id));
+            state.claims = state.claims.filter((x) => x.claim_id !== c.claim_id);
+            state.sources = state.sources.filter((s) => s.claim_id !== c.claim_id);
+            renderAnalysis();
+            toast(t('analysis.claimDeleted'), 'success');
+          } catch (err) {
+            toast(`${errText(err)}`, 'error');
+          }
+        }, null, 'delete')
+      );
+      li.append(head, meaning, actions);
+      claimsList.appendChild(li);
+    }
+
+    for (const s of state.sources) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const title = document.createElement('span');
+      title.textContent = s.title || '—';
+      const kind = document.createElement('span');
+      kind.className = 'muted small';
+      kind.textContent = `${s.kind} · ${s.verification}`;
+      head.append(title, kind);
+      const body = document.createElement('div');
+      body.className = 'analysis-row-body';
+      body.textContent = [s.citation, s.supports].filter(Boolean).join(' — ') || '—';
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      actions.append(actionButton(t('analysis.delete'), async () => {
+        try {
+          await call(api.sources.remove(s.source_id));
+          state.sources = state.sources.filter((x) => x.source_id !== s.source_id);
+          renderAnalysis();
+          toast(t('analysis.sourceDeleted'), 'success');
+        } catch (err) {
+          toast(`${errText(err)}`, 'error');
+        }
+      }, null, 'delete'));
+      li.append(head, body, actions);
+      sourcesList.appendChild(li);
+    }
+
+    $('#passages-empty').classList.toggle('hidden', state.passages.length > 0);
+    $('#claims-empty').classList.toggle('hidden', state.claims.length > 0);
+    $('#sources-empty').classList.toggle('hidden', state.sources.length > 0);
+  }
+
+  function playSpan(start, end) {
+    if (state.duration <= 0) return;
+    audio.playSegment(start, end);
+  }
+
+  async function markPassage(seg) {
+    if (!state.caseRecord) return;
+    if (!state.activeEvidenceId) {
+      toast(t('analysis.noSegment'), 'error');
+      return;
+    }
+    let revisionId = null;
+    try {
+      const revs = await call(api.transcript.revisions(state.caseRecord.case_id, state.activeEvidenceId));
+      revisionId = revs && revs.currentRevision ? revs.currentRevision.revision_id : null;
+    } catch (err) {
+      revisionId = null;
+    }
+    try {
+      const passage = await call(api.passages.create(state.caseRecord.case_id, {
+        evidenceId: state.activeEvidenceId,
+        transcriptId: state.transcriptMeta ? state.transcriptMeta.transcript_id : null,
+        revisionId,
+        startSeconds: seg.start,
+        endSeconds: seg.end,
+        text: seg.text,
+        contextBeforeSeconds: 30,
+        contextAfterSeconds: 30,
+      }));
+      state.passages.push(passage);
+      renderAnalysis();
+      toast(t('analysis.passageAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
+    }
+  }
+
+  async function createClaimFromPassage(passage) {
+    try {
+      const claim = await call(api.claims.create(state.caseRecord.case_id, {
+        passageId: passage.passage_id,
+        asStated: passage.text,
+        allegedMeaning: '',
+      }));
+      state.claims.push(claim);
+      renderAnalysis();
+      toast(t('analysis.claimAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
+    }
+  }
+
+  async function addSourceToClaim(claim) {
+    const title = window.prompt(t('analysis.sourceTitle'));
+    if (title === null) return;
+    try {
+      const source = await call(api.sources.create(state.caseRecord.case_id, {
+        claimId: claim.claim_id,
+        passageId: claim.passage_id || null,
+        kind: 'SECONDARY',
+        title: title.trim(),
+      }));
+      state.sources.push(source);
+      renderAnalysis();
+      toast(t('analysis.sourceAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
+    }
+  }
+
+  function renderTechnical() {
+    const body = $('#technical-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const ev = state.evidence.find((e) => e.evidence_id === state.activeEvidenceId);
+    const grid = document.createElement('dl');
+    grid.className = 'technical-grid';
+    const rows = ev
+      ? [
+          [t('evidence.container'), ev.format || 'unknown'],
+          [t('evidence.codec'), ev.codec || 'unknown'],
+          [t('evidence.duration'), ev.duration_seconds != null ? formatClock(ev.duration_seconds) : 'unknown'],
+          [t('evidence.sampleRate'), ev.sample_rate ? `${ev.sample_rate} Hz` : 'unknown'],
+          [t('evidence.channels'), ev.channels != null ? String(ev.channels) : 'unknown'],
+          [t('evidence.streams'), ev.audio_stream_count != null ? String(ev.audio_stream_count) : 'unknown'],
+          [t('evidence.sha'), ev.sha256],
+        ]
+      : [[t('technical.noEvidence'), t('evidence.selectPrompt')]];
+    for (const [k, v] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      wrap.append(dt, dd);
+      grid.appendChild(wrap);
+    }
+    body.appendChild(grid);
   }
 
   // ------------------------------------------------------------- case intake
@@ -880,8 +1219,60 @@
   async function openReport() {
     if (!state.caseRecord) return;
     $('#dialog-report').showModal();
+    await renderReportTemplates();
     await refreshChecklist();
     await renderReportRevisions();
+  }
+
+  // Template choice changes the section skeleton. Applying a template appends a
+  // report revision with the new structure; existing report revisions stay
+  // readable, so switching to the expert template never discards prior work.
+  async function renderReportTemplates() {
+    const select = $('#report-template');
+    if (!select) return;
+    let templates = [];
+    try {
+      templates = await call(api.report.templates());
+    } catch (err) {
+      templates = [];
+    }
+    const current = state.report || (await call(api.report.get(state.caseRecord.case_id)));
+    state.report = current || null;
+    select.innerHTML = '';
+    for (const tpl of templates) {
+      const opt = document.createElement('option');
+      opt.value = tpl.id;
+      opt.textContent = tpl.label;
+      if (current && current.template === tpl.id) opt.selected = true;
+      select.appendChild(opt);
+    }
+    if (!current && templates.length) select.value = templates[0].id;
+  }
+
+  async function applyReportTemplate() {
+    const select = $('#report-template');
+    if (!select || !state.caseRecord) return;
+    try {
+      const templates = await call(api.report.templates());
+      const tpl = templates.find((x) => x.id === select.value);
+      if (!tpl) return;
+      // Merge the new skeleton with the current draft: a section that exists in
+      // both keeps the operator's body, a new section starts empty. Sections the
+      // new template drops stay readable in the prior report revision, so
+      // switching templates never discards entered text.
+      const existing = (state.report && Array.isArray(state.report.sections)) ? state.report.sections : [];
+      const sections = tpl.sections.map((title, i) => {
+        const prev = existing.find((s) => s.title === title);
+        return prev ? { ...prev } : { id: `SEC-${i + 1}`, title, body: '', auto: true };
+      });
+      const saved = await call(api.report.save(state.caseRecord.case_id, { template: tpl.id, sections }));
+      state.report = saved;
+      toast(t('msg.reportTemplateApplied'), 'success');
+      await refreshChecklist();
+      await renderReportRevisions();
+    } catch (err) {
+      toast(`${t('error.reportTemplate')}: ${errText(err)}`, 'error');
+    }
   }
 
   async function refreshChecklist() {
@@ -1588,6 +1979,7 @@
       mergeBtn,
       actionButton(t('seg.markReviewed'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.REVIEWED), null, 'reviewed'),
       actionButton(t('seg.markVerified'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.VERIFIED), null, 'verified'),
+      actionButton(t('analysis.markPassage'), () => markPassage(seg), null, 'passage'),
       actionButton(t('seg.speaker'), () => cycleSpeaker(seg), null, 'speaker'),
       ...flagButtons,
       actionButton(t('seg.delete'), () => state.store.deleteSegment(seg.segment_id), null, 'delete')
@@ -2044,6 +2436,7 @@
     bind('#btn-case-search', 'click', runCaseSearch);
     bind('#btn-report-build', 'click', refreshChecklist);
     bind('#btn-report-export', 'click', exportReport);
+    bind('#btn-report-apply-template', 'click', applyReportTemplate);
 
     // Language selection. Default is Turkish; switching re-renders the static
     // markup and the dynamic lists without reloading the window.
@@ -2052,6 +2445,14 @@
       localeSel.addEventListener('change', (e) => setLocale(e.target.value));
       localeSel.value = state.locale;
       wiredControls.add(localeSel.id);
+    }
+
+    // Theme and accent switches. The choice is applied immediately and stored
+    // locally; it never leaves the machine.
+    bind('#btn-theme-light', 'click', () => setTheme('light'));
+    bind('#btn-theme-dark', 'click', () => setTheme('dark'));
+    for (const dot of document.querySelectorAll('.accent-dots button[data-accent]')) {
+      dot.addEventListener('click', () => setAccent(dot.getAttribute('data-accent')));
     }
 
     // Import queue controls.

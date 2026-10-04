@@ -65,6 +65,25 @@ test('the preload exposes the new professionalization APIs', () => {
   }
 });
 
+test('the preload exposes the analysis-layer APIs', () => {
+  for (const namespace of ['passages:', 'claims:', 'sources:', 'verifications:', 'analysis:']) {
+    assert.ok(PRELOAD_JS.includes(namespace), `preload must expose ${namespace}`);
+  }
+  for (const method of ['context:', 'create:', 'update:', 'remove:']) {
+    assert.ok(PRELOAD_JS.includes(method), `preload must expose ${method}`);
+  }
+});
+
+test('the analysis view is wired to the analysis IPC APIs', () => {
+  for (const id of ['passages-list', 'claims-list', 'sources-list', 'passages-empty', 'claims-empty', 'sources-empty']) {
+    assert.ok(INDEX_HTML.includes(`id="${id}"`), `index.html must contain #${id}`);
+  }
+  for (const callExpr of ['api.passages.list', 'api.claims.list', 'api.sources.list', 'api.passages.create', 'api.claims.create', 'api.sources.create']) {
+    assert.ok(RENDERER_JS.includes(callExpr), `renderer.js must call ${callExpr}`);
+  }
+  assert.ok(RENDERER_JS.includes('markPassage'), 'renderer.js must define the mark-critical action');
+});
+
 // --------------------------------------------------------------- public site
 test('the public site is Turkish-first with an optional English block', () => {
   assert.match(SITE_HTML, /<html lang="tr">/, 'the site default language must be Turkish');
