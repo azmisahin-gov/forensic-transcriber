@@ -334,6 +334,40 @@ revision-anchored sections — and never letting a template change delete entere
 text — preserves the separation the product is built on, with only an additive
 change to `reports.js`, the report dialog and i18n.
 
+## D8i — The operations centre, run records and draft collector report only what is real
+
+**Context.** PR-7 and PR-8 add a technical run list, an operations centre, a
+Ctrl+K search palette and a surface for the offline draft collector. Each of
+these is a place where the UI could fabricate confidence: a progress bar for a
+job that has no progress, a cancel button for a job that cannot be cancelled, or
+an "AI" panel that silently writes text into the report.
+
+**Decision.**
+
+- **The technical view and the operations centre read the real
+  `transcription_runs`** (`cases.runs`): engine, version, model id and SHA-256,
+  runtime mode and reason, VAD, status, error code and timestamps. This is
+  labelled software traceability, not a chain of custody, and it produces no
+  authenticity or legal characterization.
+- **Cancel is shown only while a transcription is genuinely in flight**
+  (`state.busy`). Evidence import runs to completion and exposes no cancel, so
+  the UI never promises a cancellation it cannot perform. Counts come from real
+  events, not a timer.
+- **The draft collector is off by default and opt-in via a persisted preference**
+  (`ai_assist_enabled`). `assist.generate()` takes an explicit `state` so the
+  main process passes the stored preference instead of a module constant. When
+  enabled it returns only the operator's own records
+  (`origin: assembled-from-operator-records`, `requires_expert_review: true`); it
+  makes no network call and the renderer never calls `report.save` from it, so it
+  cannot enter the report without the expert editing it.
+- **The delivery surface reuses the real readiness checklist** and states plainly
+  that UYAP preparation only writes a local folder — no login, upload or
+  e-signature automation.
+
+**Why.** These screens exist to make the tool's own state legible. Legibility
+that is not backed by real data is worse than no screen at all, so every new
+control is gated on a real signal and every "AI" surface stays passive.
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,
