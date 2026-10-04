@@ -462,12 +462,16 @@ measured rather than assumed.
 
 All automated, integration, red-team, lint, security, packaged-application and
 engine-capability checks pass. The Windows installer, portable zip and offline
-model package build from pinned, checksum-verified sources.
+model package build from pinned, checksum-verified sources. The **Release
+(version)** workflow (run `37206266562`) published **v0.5.0** with all five
+assets, and the published installer, portable and model package were
+re-downloaded here and verified against `SHA256SUMS.txt`; the `latest.yml`
+sha512 matches the installer exactly.
 
 The remaining gap is **execution on real Windows hardware with an RTX 3060**,
-which cannot be closed in this environment: no NVIDIA GPU and no CUDA toolkit are
-available, so the CUDA runtime is built in CI and GPU behaviour is explicitly
-**unverified here**. The application reports the real runtime mode on the target
-machine so that gap can be closed there.
+which cannot be closed in this environment: no Windows runtime and no NVIDIA GPU
+or CUDA toolkit are available, so the packaged Windows launch and GPU behaviour
+are explicitly **unverified here**. The application reports the real runtime mode
+on the target machine so that gap can be closed there.
 
 Status: **COMPLETE WITH KNOWN LIMITATIONS.**

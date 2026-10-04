@@ -1,7 +1,7 @@
 # Project state
 
 CURRENT_PHASE: P1 design + analysis layer — complete. PR-1…PR-8 all merged to `main` (PR #22, PR #23); PR-7/PR-8 verified end-to-end on Linux.
-CURRENT_STATUS: RELEASING 0.5.0 — every local release gate passed on Linux (lint, 225 unit, 0 critical security findings, 31 integration, packaged smoke + 60-step acceptance, engine capability) and `main` CI is green; the **Release (version)** workflow is being dispatched for the minor bump. Windows packaged launch and target-NVIDIA GPU behaviour remain **NOT VERIFIED** (no Windows host, no GPU here).
+CURRENT_STATUS: RELEASED — **0.5.0** published from `main`. Every local release gate passed on Linux (lint, 225 unit, 0 critical security findings, 31 integration, packaged smoke + 60-step acceptance, engine capability), `main` CI is green, and the **Release (version)** workflow (run `37206266562`) built and published the GitHub Release with all five assets verified. Windows packaged launch and target-NVIDIA GPU behaviour remain **NOT VERIFIED** (no Windows host, no GPU here).
 LAST_UPDATED: 2026-10-04
 
 ## P1 design + analysis layer
@@ -95,6 +95,32 @@ Fresh run on 2026-10-04 in the Linux build environment (Debian trixie, Node
   GPU capability / selection / actual use are reported separately and never
   conflated → **NOT VERIFIED on target NVIDIA hardware**.
 - Accuracy figures are a synthetic benchmark, not a human corpus.
+
+## Latest release: v0.5.0 (P1 analysis layer + expert studio)
+
+| | |
+| --- | --- |
+| Version | **0.5.0** (minor from 0.4.0) |
+| Tag | `v0.5.0` → commit `cbac3d9` ("Release 0.5.0") |
+| Release | https://github.com/azmisahin-gov/forensic-transcriber/releases/tag/v0.5.0 |
+| Assets | `ForensicTranscriber-Setup-x64.exe` (192 636 448 B), `ForensicTranscriber-Portable-x64.zip` (260 930 680 B), `ForensicTranscriber-ModelPack-0.5.0.zip` (534 060 312 B), `latest.yml` (363 B), `SHA256SUMS.txt` (309 B) |
+| Workflow run | `37206266562` — version, verify-version, build-windows, model-package, publish all **success** |
+
+Verified after publication (independent download in this environment):
+
+- `SHA256SUMS.txt` covers all three distributables and `sha256sum -c` passes for
+  every downloaded asset.
+- `latest.yml` reports `version: 0.5.0` and its **sha512 exactly matches** the
+  published installer bytes (checked with `node:crypto`).
+- The portable zip contains `resources/vendor/bin/{whisper-cli.exe,ffmpeg.exe,
+  ffprobe.exe}` and the `app.asar`.
+- `releases/latest` and `releases/latest/download/<asset>` resolve (302) to
+  `v0.5.0`; the Pages site resolves the latest tag dynamically from the API.
+- Tag, `package.json`, `package-lock.json` and `latest.yml` all agree on `0.5.0`.
+
+GPU runtime: **CPU only** — the hosted `windows-latest` runner has no CUDA
+toolkit, so the optional CUDA runtime was not built for this release. The engine
+report says `gpu runtime not bundled`, run mode `cpu`.
 
 ## P15 — delivery (merged + released)
 
