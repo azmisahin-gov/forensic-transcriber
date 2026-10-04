@@ -300,6 +300,40 @@ transcript — preserves the machine/expert separation at every lifecycle stage
 and keeps the schema change additive (no rewrite, no data migration of existing
 rows).
 
+## D8h — The expert report template keeps machine and expert text in separate sections
+
+**Context.** The design plan (PR-6) adds a Report Studio and a Ministry-style
+56.12 template. A report is where the whole case is flattened into one document,
+so it is the easiest place for the core invariant to be lost: an auto-populated
+section could quietly substitute machine output for expert-reviewed text, or a
+template switch could discard text the operator had already written.
+
+**Decision.**
+
+- **The expert template is a ten-section skeleton** (`TEMPLATES.expert`) whose
+  transcript section (`Doğrulanmış Transkript`) is the only place the transcript
+  text appears; the expert reading lives in separate `Kritik Pasajlar`,
+  `İddia–Kanıt Matrisi` and `Teknik Sonuç ve Belirsizlikler` sections.
+- **Auto-population only fills sections that are empty** and never overwrites an
+  operator's body. The engine record (engine, version, model, model SHA-256,
+  runtime mode/reason, VAD) is written to a dedicated tools section, or folded
+  into the method section for templates that lack one.
+- **Each passage carries its source revision id** and its context window into the
+  report; each claim shows `as_stated` and `alleged_meaning` as distinct lines
+  with its linked sources. The legal-scope boundary line is always present.
+- **Switching templates is non-destructive.** Applying a template merges its
+  skeleton with the current draft (shared titles keep their body) and appends a
+  report revision; sections the new template drops stay readable in the prior
+  revision. Finalized reports remain locked (`REPORT_FINAL_LOCKED`).
+- **Expert checklist items gate `ready` only for the expert template**, so an
+  ordinary report's readiness is unchanged.
+
+**Why.** The report is the deliverable a reader will treat as the case record.
+Keeping the machine transcript and the expert interpretation in distinct,
+revision-anchored sections — and never letting a template change delete entered
+text — preserves the separation the product is built on, with only an additive
+change to `reports.js`, the report dialog and i18n.
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,

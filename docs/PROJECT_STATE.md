@@ -1,7 +1,7 @@
 # Project state
 
 CURRENT_PHASE: P1 design + analysis layer (branch `design/p1-light-theme-accents`, not merged)
-CURRENT_STATUS: IN PROGRESS — PR-1 (light-first theme) and PR-2 (studio shell + step routing) committed; PR-3 (expert analysis layer, schema 7, archive v3) committed and covered by unit tests
+CURRENT_STATUS: IN PROGRESS — theme, studio shell, expert analysis layer (schema 7, archive v3), analysis workspace wiring and Report Studio (expert 56.12 template) committed and covered by unit tests
 LAST_UPDATED: 2026-10-03
 
 ## P1 design + analysis layer (branch `design/p1-light-theme-accents`)
@@ -24,16 +24,31 @@ Committed so far:
   layer and the case history log round-trip through restore with explicit
   `old id → new id` remapping; v1 and v2 archives stay readable. Restore still
   writes a new case and never overwrites the source.
+- **PR-5 — analysis workspace wiring.** The analysis page is reachable from the
+  studio; a segment can be marked critical (creating a context-windowed passage
+  anchored to the current transcript revision) and a passage can be promoted to a
+  claim with an external source and a verification status.
+- **PR-6 — Report Studio + expert (56.12) template.** A ten-section expert
+  template keeps the machine transcript (`Doğrulanmış Transkript`) separate from
+  the expert reading (`Kritik Pasajlar`, `İddia–Kanıt Matrisi`,
+  `Teknik Sonuç ve Belirsizlikler`). The report auto-populates the engine record,
+  per-evidence SHA-256 integrity, audio properties, a time-sorted timeline, the
+  critical passages with their context windows and source revisions, and the
+  claim-evidence matrix with linked sources, and always prints the legal-scope
+  boundary. The template is selectable in the Report dialog; applying one merges
+  the skeleton with the current draft and appends a report revision, so no
+  entered text and no prior revision is lost. The checklist gains expert items
+  (contexted passages, sourced claims, uncertainty) that only gate `ready` for
+  the expert template.
 
 ### Verified for this branch
 
-- `npm test` → 214/214 unit tests passed (5 FFmpeg-dependent cases were skipped
-  in an earlier run and re-run green once FFmpeg was present; final run: 214 pass,
-  0 fail, 0 skip).
-- `npm run lint` → Lint OK — 71 files checked.
+- `node --test tests/unit/*.test.js` → **219/219** unit tests passed, 0 fail,
+  0 skip (includes the new `p1-report-template.test.js`).
+- `npm run lint` → Lint OK — 72 files checked.
 - `node scripts/security-check.js` → 0 critical findings.
-- Integration: `FT_FFMPEG_PATH=... node --test tests/integration/*.test.js` →
-  31/31 passed.
+- Integration: `FT_WHISPER_CLI_PATH=... FT_TEST_MODEL=... FT_TEST_VAD=... node
+  --test tests/integration/*.test.js` → **31/31** passed, 0 skip.
 - Packaged smoke: `xvfb-run -a electron . --smoke-test --no-sandbox` → ok true
   (all steps, including ffmpeg/ffprobe available and case create/persist).
 
@@ -41,8 +56,9 @@ Committed so far:
 
 - Windows CI for this branch has not run (the branch is not pushed). Windows-only
   behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
-  therefore **NOT VERIFIED** for PR-3.
-- PR-4…PR-8 are not implemented yet.
+  therefore **NOT VERIFIED** for this branch.
+- PR-7 (technical screen + operations centre + Ctrl+K search) and PR-8 (passive
+  AI surface, delivery/UYAP UI, full i18n, docs) are not implemented yet.
 
 ## P15 — delivery (merged + released)
 
