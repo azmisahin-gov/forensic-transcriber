@@ -1,8 +1,48 @@
 # Project state
 
-CURRENT_PHASE: P15 — delivery of professionalization v1 (merged + released)
-CURRENT_STATUS: DELIVERED — merged to main and released as v0.3.0; Linux CI/package gates and Windows unit CI passed
+CURRENT_PHASE: P1 design + analysis layer (branch `design/p1-light-theme-accents`, not merged)
+CURRENT_STATUS: IN PROGRESS — PR-1 (light-first theme) and PR-2 (studio shell + step routing) committed; PR-3 (expert analysis layer, schema 7, archive v3) committed and covered by unit tests
 LAST_UPDATED: 2026-10-03
+
+## P1 design + analysis layer (branch `design/p1-light-theme-accents`)
+
+Work in progress on a dedicated branch. The approved plan is PR-1…PR-8.
+
+Committed so far:
+
+- **PR-1 — light-first theme with a user-selectable accent.** Light is the
+  default; dark is optional; the accent (blue/teal/indigo) is user-selectable.
+  Visually checked by capturing the real renderer headlessly.
+- **PR-2 — expert studio shell + step routing.** An eight-step workflow stepper
+  (Görevlendirme → Teslim) plus a view router (assignment/studio/analysis/
+  technical) that shows exactly one page at a time.
+- **PR-3 — expert analysis layer (schema_version 7).** Passages, claims, sources
+  and verifications, each anchored to a transcript revision and kept strictly
+  separate from the machine transcript. A passage requires a positive context
+  window; a claim keeps what was said (`as_stated`) distinct from the alleged
+  meaning (`alleged_meaning`). The case archive was extended to **v3** so this
+  layer and the case history log round-trip through restore with explicit
+  `old id → new id` remapping; v1 and v2 archives stay readable. Restore still
+  writes a new case and never overwrites the source.
+
+### Verified for this branch
+
+- `npm test` → 214/214 unit tests passed (5 FFmpeg-dependent cases were skipped
+  in an earlier run and re-run green once FFmpeg was present; final run: 214 pass,
+  0 fail, 0 skip).
+- `npm run lint` → Lint OK — 71 files checked.
+- `node scripts/security-check.js` → 0 critical findings.
+- Integration: `FT_FFMPEG_PATH=... node --test tests/integration/*.test.js` →
+  31/31 passed.
+- Packaged smoke: `xvfb-run -a electron . --smoke-test --no-sandbox` → ok true
+  (all steps, including ffmpeg/ffprobe available and case create/persist).
+
+### Not yet verified for this branch
+
+- Windows CI for this branch has not run (the branch is not pushed). Windows-only
+  behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
+  therefore **NOT VERIFIED** for PR-3.
+- PR-4…PR-8 are not implemented yet.
 
 ## P15 — delivery (merged + released)
 

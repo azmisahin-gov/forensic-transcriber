@@ -259,6 +259,47 @@ erodes trust in a forensics tool; deriving both from the release itself keeps th
 page correct without a manual edit on every release. A regression test asserts
 the Turkish default and the absence of a hard-coded version.
 
+## D8g — The expert analysis layer is separate from the transcript
+
+**Context.** The design plan (PR-3) adds a workspace for the expert's own
+reading of a recording: the critical passages they flag, the claims they record,
+the external sources they cite and the verification status of each claim. This
+sits close to the transcript, so it is the most likely place for the core
+invariant — machine output and expert work never silently overwrite each other —
+to be broken by a shortcut such as storing expert notes back onto transcript
+segments.
+
+**Decision.**
+
+- **The analysis layer is its own set of rows** (`passages`, `claims`, `sources`,
+  `verifications`, schema_version 7). It never writes to `segments`,
+  `transcripts` or `transcript_revisions`. The transcript stays the machine +
+  human-review artifact; the analysis layer is the expert's interpretation of it.
+- **A passage is anchored, not floating.** It records the evidence, the transcript
+  and the exact `revision_id` it was taken from, so a later ASR run cannot
+  re-attach it to different text. It also carries a mandatory positive context
+  window (`context_before_seconds` / `context_after_seconds`): a passage without
+  its surrounding audio is refused (`CONTEXT_REQUIRED`).
+- **A claim separates what was said from what is alleged.** `as_stated` and
+  `alleged_meaning` are distinct columns, and `asserted_by` records who makes the
+  claim. The application never computes a legal conclusion from them; a claim is
+  a structured record, not an assessment.
+- **Vocabulary is fixed.** `speech_act`, `confidence` and `verification` are
+  validated against fixed enumerations; an unknown value is refused
+  (`INVALID_INPUT`) rather than stored. Evidence links are checked to belong to
+  the same case (`EVIDENCE_MISMATCH`).
+- **Archive v3 carries the layer.** Passages, claims, sources, verifications and
+  the case history log round-trip through archive/restore with explicit
+  `old id → new id` remapping; v1 and v2 archives remain readable. Restore still
+  writes a new case and re-verifies every evidence hash.
+
+**Why.** The value of an expert review is that its statements are traceable to
+the exact audio and the exact transcript revision they were made against. Keeping
+that as a separate, revision-anchored graph — instead of annotations on the
+transcript — preserves the machine/expert separation at every lifecycle stage
+and keeps the schema change additive (no rewrite, no data migration of existing
+rows).
+
 ## D10 — Repository layout
 
 Single repository, single application. `src/main`, `src/renderer`,
