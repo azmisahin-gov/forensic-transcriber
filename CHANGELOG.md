@@ -5,6 +5,8 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-04
+
 ### Added
 
 - **Technical pre-review run records.** The technical view now lists the case's
