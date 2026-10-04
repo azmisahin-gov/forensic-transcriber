@@ -28,6 +28,7 @@ libraries, so `FT_FFMPEG_PATH`/`FT_FFPROBE_PATH` point at the host binaries).
 | --- | --- |
 | `npm run lint` | Lint OK — 72 files checked |
 | `npm run test:unit` | 225 passed, 0 failed, 0 skipped |
+| `npm test` (unit + integration, host FFmpeg) | 256 passed, 0 failed, 0 skipped |
 | `node scripts/security-check.js` | 0 critical findings |
 | `node --test tests/integration/*.test.js` (with FFmpeg + whisper-cli) | 31 passed, 0 failed, 0 skipped |
 | `verify:release.js` packaged smoke (fresh `release/linux-unpacked`) | `ok:true`, `unwired: 0` |
