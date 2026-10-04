@@ -12,9 +12,13 @@ const {
   REVISION_STATE,
   REPORT_REVISION_STATE,
   UNCLEAR_PLACEHOLDER,
+  SPEECH_ACT_VALUES,
+  PASSAGE_CONFIDENCE_VALUES,
+  VERIFICATION_STATUS_VALUES,
+  SOURCE_KIND_VALUES,
 } = require('../../shared/constants');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 // Assignable case metadata (56.12 görevlendirme / intake). Free text, no legal
 // interpretation is derived from it. Stored on the case row so a case is
@@ -440,6 +444,79 @@ class Storage {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_findings_case ON findings(case_id, created_at);
+
+      -- Expert analysis layer (schema 7, additive). A passage is anchored to a
+      -- transcript revision (never raw ASR) and always carries a context window,
+      -- so an isolated quote cannot be recorded without its surroundings.
+      CREATE TABLE IF NOT EXISTS passages (
+        passage_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        evidence_id TEXT NOT NULL,
+        transcript_id TEXT,
+        revision_id TEXT,
+        start_seconds REAL NOT NULL,
+        end_seconds REAL NOT NULL,
+        context_before_seconds REAL NOT NULL DEFAULT 30,
+        context_after_seconds REAL NOT NULL DEFAULT 30,
+        text TEXT NOT NULL DEFAULT '',
+        speech_act TEXT NOT NULL DEFAULT 'LITERAL',
+        confidence TEXT NOT NULL DEFAULT 'MEDIUM',
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_passages_case ON passages(case_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_passages_evidence ON passages(evidence_id, start_seconds);
+
+      -- A claim separates what was said (as_stated) from the meaning that is
+      -- alleged (alleged_meaning). The two are never merged into one field.
+      CREATE TABLE IF NOT EXISTS claims (
+        claim_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        passage_id TEXT,
+        as_stated TEXT NOT NULL DEFAULT '',
+        alleged_meaning TEXT NOT NULL DEFAULT '',
+        asserted_by TEXT NOT NULL DEFAULT '',
+        verification TEXT NOT NULL DEFAULT 'PENDING',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_claims_case ON claims(case_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_claims_passage ON claims(passage_id);
+
+      -- External sources used to verify a claim or passage. Never a conclusion;
+      -- only a reference the expert can weigh.
+      CREATE TABLE IF NOT EXISTS sources (
+        source_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        claim_id TEXT,
+        passage_id TEXT,
+        kind TEXT NOT NULL DEFAULT 'SECONDARY',
+        title TEXT NOT NULL DEFAULT '',
+        citation TEXT NOT NULL DEFAULT '',
+        supports TEXT NOT NULL DEFAULT '',
+        verification TEXT NOT NULL DEFAULT 'PENDING',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sources_case ON sources(case_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_sources_claim ON sources(claim_id);
+
+      -- A reality-claim verification record: "this was asserted, and here is
+      -- whether it could be checked". The status is always explicit.
+      CREATE TABLE IF NOT EXISTS verifications (
+        verification_id TEXT PRIMARY KEY,
+        case_id TEXT NOT NULL REFERENCES cases(case_id) ON DELETE CASCADE,
+        claim_id TEXT,
+        passage_id TEXT,
+        claim_text TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        evidence_ref TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_verifications_case ON verifications(case_id, created_at);
     `);
 
     this._migrateSegmentsOriginalText();
@@ -756,6 +833,18 @@ class Storage {
         'INSERT INTO history(case_id, action, target, detail_json, created_at) VALUES(?,?,?,?,?)'
       )
       .run(caseId, action, target, detail ? JSON.stringify(detail) : null, nowIso());
+  }
+
+  /**
+   * Restore one archived history row. The action and its original timestamp are
+   * preserved verbatim; the caller has already remapped target/detail ids so the
+   * log stays truthful about which new entities it refers to.
+   */
+  restoreHistory(caseId, entry, { target = null, detail = null } = {}) {
+    const ts = entry.created_at || nowIso();
+    this.db
+      .prepare('INSERT INTO history(case_id, action, target, detail_json, created_at) VALUES(?,?,?,?,?)')
+      .run(caseId, String(entry.action), target, detail ? JSON.stringify(detail) : null, ts);
   }
 
   createCase({ title, notes = '', ...assignment }) {
@@ -1713,6 +1802,80 @@ class Storage {
   }
 
   /**
+   * Restore the analysis layer from an archive. Ids are regenerated and the
+   * caller supplies the evidence/revision remaps; a passage keeps the exact
+   * revision it was taken from, and claims/sources/verifications keep their
+   * links. Returns the old->new maps so later rows (and history) can be remapped.
+   */
+  restorePassage(caseId, passage, { evidenceId = null, revisionId = null } = {}) {
+    const passageId = makeId('PSG');
+    const ts = passage.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO passages(passage_id, case_id, evidence_id, transcript_id, revision_id, start_seconds, end_seconds, context_before_seconds, context_after_seconds, text, speech_act, confidence, note, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        passageId, caseId, evidenceId,
+        passage.transcript_id || null, revisionId || null,
+        Number(passage.start_seconds) || 0, Number(passage.end_seconds) || 0,
+        Number(passage.context_before_seconds) || 30, Number(passage.context_after_seconds) || 30,
+        String(passage.text || ''),
+        passage.speech_act || 'LITERAL', passage.confidence || 'MEDIUM',
+        String(passage.note || ''), ts, passage.updated_at || ts
+      );
+    return passageId;
+  }
+
+  restoreClaim(caseId, claim, { passageId = null } = {}) {
+    const claimId = makeId('CLAIM');
+    const ts = claim.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO claims(claim_id, case_id, passage_id, as_stated, alleged_meaning, asserted_by, verification, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        claimId, caseId, passageId,
+        String(claim.as_stated || ''), String(claim.alleged_meaning || ''),
+        String(claim.asserted_by || ''), claim.verification || 'PENDING', ts, claim.updated_at || ts
+      );
+    return claimId;
+  }
+
+  restoreSource(caseId, source, { claimId = null, passageId = null } = {}) {
+    const sourceId = makeId('SRC');
+    const ts = source.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO sources(source_id, case_id, claim_id, passage_id, kind, title, citation, supports, verification, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        sourceId, caseId, claimId, passageId,
+        source.kind || 'SECONDARY', String(source.title || ''), String(source.citation || ''),
+        String(source.supports || ''), source.verification || 'PENDING', ts, source.updated_at || ts
+      );
+    return sourceId;
+  }
+
+  restoreVerification(caseId, verification, { claimId = null, passageId = null } = {}) {
+    const verificationId = makeId('VER');
+    const ts = verification.created_at || nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO verifications(verification_id, case_id, claim_id, passage_id, claim_text, status, evidence_ref, note, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        verificationId, caseId, claimId, passageId,
+        String(verification.claim_text || ''), verification.status || 'PENDING',
+        String(verification.evidence_ref || ''), String(verification.note || ''), ts, verification.updated_at || ts
+      );
+    return verificationId;
+  }
+
+  /**
    * Restore the report working row and its append-only revisions, preserving
    * states, ordering and the current marker. Revision ids are regenerated; the
    * caller does not need a mapping because report revisions are not referenced
@@ -2031,6 +2194,425 @@ class Storage {
   listFindings(caseId) {
     const rows = this.db.prepare('SELECT * FROM findings WHERE case_id = ? ORDER BY created_at ASC').all(caseId);
     return rows.map((r) => this._describeFinding(r));
+  }
+
+  // -------------------------------------------------------- analysis layer
+  _requireCase(caseId) {
+    const kase = this.getCase(caseId);
+    if (!kase) {
+      const err = new Error(`Case not found: ${caseId}`);
+      err.code = 'CASE_NOT_FOUND';
+      throw err;
+    }
+    return kase;
+  }
+
+  _describePassage(row) {
+    if (!row) return null;
+    return {
+      passage_id: row.passage_id,
+      case_id: row.case_id,
+      evidence_id: row.evidence_id,
+      transcript_id: row.transcript_id || null,
+      revision_id: row.revision_id || null,
+      start_seconds: Number(row.start_seconds),
+      end_seconds: Number(row.end_seconds),
+      context_before_seconds: Number(row.context_before_seconds),
+      context_after_seconds: Number(row.context_after_seconds),
+      text: row.text || '',
+      speech_act: row.speech_act,
+      confidence: row.confidence,
+      note: row.note || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _describeClaim(row) {
+    if (!row) return null;
+    return {
+      claim_id: row.claim_id,
+      case_id: row.case_id,
+      passage_id: row.passage_id || null,
+      as_stated: row.as_stated || '',
+      alleged_meaning: row.alleged_meaning || '',
+      asserted_by: row.asserted_by || '',
+      verification: row.verification,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _describeSource(row) {
+    if (!row) return null;
+    return {
+      source_id: row.source_id,
+      case_id: row.case_id,
+      claim_id: row.claim_id || null,
+      passage_id: row.passage_id || null,
+      kind: row.kind,
+      title: row.title || '',
+      citation: row.citation || '',
+      supports: row.supports || '',
+      verification: row.verification,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _describeVerification(row) {
+    if (!row) return null;
+    return {
+      verification_id: row.verification_id,
+      case_id: row.case_id,
+      claim_id: row.claim_id || null,
+      passage_id: row.passage_id || null,
+      claim_text: row.claim_text || '',
+      status: row.status,
+      evidence_ref: row.evidence_ref || '',
+      note: row.note || '',
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _assertEnum(value, allowed, field, fallback) {
+    const v = value === undefined || value === null || value === '' ? fallback : String(value).toUpperCase();
+    if (!allowed.includes(v)) {
+      const err = new Error(`Invalid ${field}: ${value}`);
+      err.code = 'INVALID_INPUT';
+      err.field = field;
+      throw err;
+    }
+    return v;
+  }
+
+  /** Evidence must belong to the case; a cross-case link is refused, not stored. */
+  _assertEvidenceInCase(caseId, evidenceId) {
+    if (!evidenceId) return null;
+    const ev = this.getEvidence(evidenceId);
+    if (!ev || ev.case_id !== caseId) {
+      const err = new Error('Evidence does not belong to this case.');
+      err.code = 'EVIDENCE_MISMATCH';
+      throw err;
+    }
+    return evidenceId;
+  }
+
+  createPassage(caseId, input = {}) {
+    this._requireCase(caseId);
+    const evidenceId = this._assertEvidenceInCase(caseId, input.evidenceId);
+    if (!evidenceId) {
+      const err = new Error('A passage requires evidence.');
+      err.code = 'INVALID_INPUT';
+      throw err;
+    }
+    const start = Number(input.startSeconds);
+    const end = Number(input.endSeconds);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+      const err = new Error('A passage requires a valid time range.');
+      err.code = 'INVALID_INPUT';
+      throw err;
+    }
+    // Context is mandatory: a passage without surrounding audio is not recorded.
+    const before = input.contextBeforeSeconds === undefined || input.contextBeforeSeconds === null
+      ? 30
+      : Number(input.contextBeforeSeconds);
+    const after = input.contextAfterSeconds === undefined || input.contextAfterSeconds === null
+      ? 30
+      : Number(input.contextAfterSeconds);
+    if (!Number.isFinite(before) || !Number.isFinite(after) || before <= 0 || after <= 0) {
+      const err = new Error('A passage requires a positive context window.');
+      err.code = 'CONTEXT_REQUIRED';
+      throw err;
+    }
+    const speechAct = this._assertEnum(input.speechAct, SPEECH_ACT_VALUES, 'speech_act', 'LITERAL');
+    const confidence = this._assertEnum(input.confidence, PASSAGE_CONFIDENCE_VALUES, 'confidence', 'MEDIUM');
+    const passageId = makeId('PSG');
+    const ts = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO passages(passage_id, case_id, evidence_id, transcript_id, revision_id, start_seconds, end_seconds, context_before_seconds, context_after_seconds, text, speech_act, confidence, note, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        passageId, caseId, evidenceId,
+        input.transcriptId || null, input.revisionId || null,
+        start, end, before, after,
+        String(input.text || ''), speechAct, confidence, String(input.note || ''), ts, ts
+      );
+    this.recordHistory(caseId, 'PASSAGE_CREATED', evidenceId, { passageId, revisionId: input.revisionId || null });
+    this._touchCase(caseId);
+    return this._describePassage(this.db.prepare('SELECT * FROM passages WHERE passage_id = ?').get(passageId));
+  }
+
+  updatePassage(passageId, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM passages WHERE passage_id = ?').get(passageId);
+    if (!row) {
+      const err = new Error('Passage not found.');
+      err.code = 'PASSAGE_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    for (const field of ['text', 'note']) {
+      if (patch[field] !== undefined) { sets.push(`${field} = ?`); values.push(String(patch[field])); }
+    }
+    if (patch.speechAct !== undefined) {
+      sets.push('speech_act = ?');
+      values.push(this._assertEnum(patch.speechAct, SPEECH_ACT_VALUES, 'speech_act', row.speech_act));
+    }
+    if (patch.confidence !== undefined) {
+      sets.push('confidence = ?');
+      values.push(this._assertEnum(patch.confidence, PASSAGE_CONFIDENCE_VALUES, 'confidence', row.confidence));
+    }
+    if (patch.startSeconds !== undefined || patch.endSeconds !== undefined) {
+      const start = patch.startSeconds !== undefined ? Number(patch.startSeconds) : Number(row.start_seconds);
+      const end = patch.endSeconds !== undefined ? Number(patch.endSeconds) : Number(row.end_seconds);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        const err = new Error('A passage requires a valid time range.');
+        err.code = 'INVALID_INPUT';
+        throw err;
+      }
+      sets.push('start_seconds = ?', 'end_seconds = ?');
+      values.push(start, end);
+    }
+    values.push(passageId);
+    this.db.prepare(`UPDATE passages SET ${sets.join(', ')} WHERE passage_id = ?`).run(...values);
+    return this._describePassage(this.db.prepare('SELECT * FROM passages WHERE passage_id = ?').get(passageId));
+  }
+
+  deletePassage(passageId) {
+    const row = this.db.prepare('SELECT * FROM passages WHERE passage_id = ?').get(passageId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM passages WHERE passage_id = ?').run(passageId);
+    this.db.prepare('UPDATE claims SET passage_id = NULL WHERE passage_id = ?').run(passageId);
+    this.db.prepare('UPDATE sources SET passage_id = NULL WHERE passage_id = ?').run(passageId);
+    this.db.prepare('UPDATE verifications SET passage_id = NULL WHERE passage_id = ?').run(passageId);
+    this.recordHistory(row.case_id, 'PASSAGE_DELETED', row.evidence_id, { passageId });
+    return true;
+  }
+
+  listPassages(caseId) {
+    return this.db
+      .prepare('SELECT * FROM passages WHERE case_id = ? ORDER BY start_seconds ASC')
+      .all(caseId)
+      .map((r) => this._describePassage(r));
+  }
+
+  createClaim(caseId, input = {}) {
+    this._requireCase(caseId);
+    const claimId = makeId('CLAIM');
+    const ts = nowIso();
+    const verification = this._assertEnum(input.verification, VERIFICATION_STATUS_VALUES, 'verification', 'PENDING');
+    this.db
+      .prepare(
+        `INSERT INTO claims(claim_id, case_id, passage_id, as_stated, alleged_meaning, asserted_by, verification, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        claimId, caseId, input.passageId || null,
+        String(input.asStated || ''), String(input.allegedMeaning || ''),
+        String(input.assertedBy || ''), verification, ts, ts
+      );
+    this.recordHistory(caseId, 'CLAIM_CREATED', input.passageId || caseId, { claimId });
+    this._touchCase(caseId);
+    return this._describeClaim(this.db.prepare('SELECT * FROM claims WHERE claim_id = ?').get(claimId));
+  }
+
+  updateClaim(claimId, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM claims WHERE claim_id = ?').get(claimId);
+    if (!row) {
+      const err = new Error('Claim not found.');
+      err.code = 'CLAIM_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    for (const [field, col] of [['asStated', 'as_stated'], ['allegedMeaning', 'alleged_meaning'], ['assertedBy', 'asserted_by']]) {
+      if (patch[field] !== undefined) { sets.push(`${col} = ?`); values.push(String(patch[field])); }
+    }
+    if (patch.passageId !== undefined) { sets.push('passage_id = ?'); values.push(patch.passageId || null); }
+    if (patch.verification !== undefined) {
+      sets.push('verification = ?');
+      values.push(this._assertEnum(patch.verification, VERIFICATION_STATUS_VALUES, 'verification', row.verification));
+    }
+    values.push(claimId);
+    this.db.prepare(`UPDATE claims SET ${sets.join(', ')} WHERE claim_id = ?`).run(...values);
+    return this._describeClaim(this.db.prepare('SELECT * FROM claims WHERE claim_id = ?').get(claimId));
+  }
+
+  deleteClaim(claimId) {
+    const row = this.db.prepare('SELECT * FROM claims WHERE claim_id = ?').get(claimId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM claims WHERE claim_id = ?').run(claimId);
+    this.db.prepare('UPDATE sources SET claim_id = NULL WHERE claim_id = ?').run(claimId);
+    this.db.prepare('UPDATE verifications SET claim_id = NULL WHERE claim_id = ?').run(claimId);
+    this.recordHistory(row.case_id, 'CLAIM_DELETED', row.passage_id || row.case_id, { claimId });
+    return true;
+  }
+
+  listClaims(caseId) {
+    return this.db
+      .prepare('SELECT * FROM claims WHERE case_id = ? ORDER BY created_at ASC')
+      .all(caseId)
+      .map((r) => this._describeClaim(r));
+  }
+
+  createSource(caseId, input = {}) {
+    this._requireCase(caseId);
+    const sourceId = makeId('SRC');
+    const ts = nowIso();
+    const kind = this._assertEnum(input.kind, SOURCE_KIND_VALUES, 'kind', 'SECONDARY');
+    const verification = this._assertEnum(input.verification, VERIFICATION_STATUS_VALUES, 'verification', 'PENDING');
+    this.db
+      .prepare(
+        `INSERT INTO sources(source_id, case_id, claim_id, passage_id, kind, title, citation, supports, verification, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        sourceId, caseId, input.claimId || null, input.passageId || null,
+        kind, String(input.title || ''), String(input.citation || ''),
+        String(input.supports || ''), verification, ts, ts
+      );
+    this.recordHistory(caseId, 'SOURCE_CREATED', input.claimId || caseId, { sourceId, kind });
+    this._touchCase(caseId);
+    return this._describeSource(this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(sourceId));
+  }
+
+  updateSource(sourceId, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(sourceId);
+    if (!row) {
+      const err = new Error('Source not found.');
+      err.code = 'SOURCE_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    for (const [field, col] of [['title', 'title'], ['citation', 'citation'], ['supports', 'supports']]) {
+      if (patch[field] !== undefined) { sets.push(`${col} = ?`); values.push(String(patch[field])); }
+    }
+    if (patch.kind !== undefined) {
+      sets.push('kind = ?');
+      values.push(this._assertEnum(patch.kind, SOURCE_KIND_VALUES, 'kind', row.kind));
+    }
+    if (patch.verification !== undefined) {
+      sets.push('verification = ?');
+      values.push(this._assertEnum(patch.verification, VERIFICATION_STATUS_VALUES, 'verification', row.verification));
+    }
+    if (patch.claimId !== undefined) { sets.push('claim_id = ?'); values.push(patch.claimId || null); }
+    if (patch.passageId !== undefined) { sets.push('passage_id = ?'); values.push(patch.passageId || null); }
+    values.push(sourceId);
+    this.db.prepare(`UPDATE sources SET ${sets.join(', ')} WHERE source_id = ?`).run(...values);
+    return this._describeSource(this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(sourceId));
+  }
+
+  deleteSource(sourceId) {
+    const row = this.db.prepare('SELECT * FROM sources WHERE source_id = ?').get(sourceId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM sources WHERE source_id = ?').run(sourceId);
+    this.recordHistory(row.case_id, 'SOURCE_DELETED', row.claim_id || row.case_id, { sourceId });
+    return true;
+  }
+
+  listSources(caseId) {
+    return this.db
+      .prepare('SELECT * FROM sources WHERE case_id = ? ORDER BY created_at ASC')
+      .all(caseId)
+      .map((r) => this._describeSource(r));
+  }
+
+  createVerification(caseId, input = {}) {
+    this._requireCase(caseId);
+    const verificationId = makeId('VER');
+    const ts = nowIso();
+    const status = this._assertEnum(input.status, VERIFICATION_STATUS_VALUES, 'status', 'PENDING');
+    this.db
+      .prepare(
+        `INSERT INTO verifications(verification_id, case_id, claim_id, passage_id, claim_text, status, evidence_ref, note, created_at, updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        verificationId, caseId, input.claimId || null, input.passageId || null,
+        String(input.claimText || ''), status, String(input.evidenceRef || ''), String(input.note || ''), ts, ts
+      );
+    this.recordHistory(caseId, 'VERIFICATION_RECORDED', input.claimId || caseId, { verificationId, status });
+    this._touchCase(caseId);
+    return this._describeVerification(this.db.prepare('SELECT * FROM verifications WHERE verification_id = ?').get(verificationId));
+  }
+
+  updateVerification(verificationId, patch = {}) {
+    const row = this.db.prepare('SELECT * FROM verifications WHERE verification_id = ?').get(verificationId);
+    if (!row) {
+      const err = new Error('Verification not found.');
+      err.code = 'VERIFICATION_NOT_FOUND';
+      throw err;
+    }
+    const sets = ['updated_at = ?'];
+    const values = [nowIso()];
+    for (const [field, col] of [['claimText', 'claim_text'], ['evidenceRef', 'evidence_ref'], ['note', 'note']]) {
+      if (patch[field] !== undefined) { sets.push(`${col} = ?`); values.push(String(patch[field])); }
+    }
+    if (patch.status !== undefined) {
+      sets.push('status = ?');
+      values.push(this._assertEnum(patch.status, VERIFICATION_STATUS_VALUES, 'status', row.status));
+    }
+    if (patch.claimId !== undefined) { sets.push('claim_id = ?'); values.push(patch.claimId || null); }
+    if (patch.passageId !== undefined) { sets.push('passage_id = ?'); values.push(patch.passageId || null); }
+    values.push(verificationId);
+    this.db.prepare(`UPDATE verifications SET ${sets.join(', ')} WHERE verification_id = ?`).run(...values);
+    return this._describeVerification(this.db.prepare('SELECT * FROM verifications WHERE verification_id = ?').get(verificationId));
+  }
+
+  deleteVerification(verificationId) {
+    const row = this.db.prepare('SELECT * FROM verifications WHERE verification_id = ?').get(verificationId);
+    if (!row) return false;
+    this.db.prepare('DELETE FROM verifications WHERE verification_id = ?').run(verificationId);
+    this.recordHistory(row.case_id, 'VERIFICATION_DELETED', row.claim_id || row.case_id, { verificationId });
+    return true;
+  }
+
+  listVerifications(caseId) {
+    return this.db
+      .prepare('SELECT * FROM verifications WHERE case_id = ? ORDER BY created_at ASC')
+      .all(caseId)
+      .map((r) => this._describeVerification(r));
+  }
+
+  /**
+   * Context window around a time range. This is what lets the UI show a passage
+   * with its surroundings; it reads only from the stored transcript and never
+   * re-runs ASR.
+   */
+  getAnalysisContext(evidenceId, startSeconds, endSeconds, windowSeconds = 30) {
+    const ev = this.getEvidence(evidenceId);
+    if (!ev) {
+      const err = new Error('Evidence not found.');
+      err.code = 'EVIDENCE_NOT_FOUND';
+      throw err;
+    }
+    const win = Number.isFinite(Number(windowSeconds)) && Number(windowSeconds) > 0 ? Number(windowSeconds) : 30;
+    const start = Number(startSeconds);
+    const end = Number(endSeconds);
+    const from = Math.max(0, (Number.isFinite(start) ? start : 0) - win);
+    const to = (Number.isFinite(end) ? end : from) + win;
+    const transcript = this.getTranscript(ev.case_id, evidenceId);
+    const segments = transcript ? this.getSegments(transcript.transcript_id) : [];
+    const inWindow = segments.filter((s) => s.end >= from && s.start <= to);
+    return {
+      evidence_id: evidenceId,
+      from_seconds: from,
+      to_seconds: to,
+      window_seconds: win,
+      segments: inWindow.map((s) => ({
+        segment_id: s.segment_id,
+        start: s.start,
+        end: s.end,
+        speaker: s.speaker,
+        text: s.text,
+        status: s.status,
+      })),
+    };
   }
 
   // ----------------------------------------------------------------- reports

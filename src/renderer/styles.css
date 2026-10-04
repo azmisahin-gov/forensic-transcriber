@@ -243,14 +243,12 @@ html, body {
 .analysis-col h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); }
 .analysis-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .analysis-row { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 9px 11px; background: var(--bg-3); }
-.analysis-row .body { font-size: 13px; line-height: 1.45; word-break: break-word; }
-.analysis-row .meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--text-mute); flex-wrap: wrap; }
-.analysis-row .meta .spacer { flex: 1; }
-.analysis-row .ts { font-family: var(--mono); color: var(--accent); }
-.analysis-row .pill { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
-.analysis-row .pill.ok { color: var(--green-fg); border-color: var(--green-bd); background: var(--green-bg); }
-.analysis-row .pill.warn { color: var(--amber-fg); border-color: var(--amber-bd); background: var(--amber-bg); }
-.analysis-row .pill.bad { color: var(--red-fg); border-color: var(--red-bd); background: var(--red-bg); }
+.analysis-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.analysis-row-head .ts { font-family: var(--mono); color: var(--accent); background: none; border: none; padding: 0; cursor: pointer; }
+.analysis-row-body { font-size: 13px; line-height: 1.45; word-break: break-word; margin-top: 4px; }
+.analysis-row-actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.analysis-row .analysis-as-stated { font-size: 13px; }
+.analysis-row .status { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border-2); }
 .technical-body { padding: 14px 20px; overflow-y: auto; min-height: 0; }
 .technical-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px 20px; margin: 0 0 16px; }
 .technical-grid div { display: flex; flex-direction: column; gap: 2px; }

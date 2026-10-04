@@ -42,6 +42,10 @@
     activeView: 'studio',
     notes: [],
     findings: [],
+    passages: [],
+    claims: [],
+    sources: [],
+    verifications: [],
     report: null,
     revisions: [],
     searchQuery: '',
@@ -684,6 +688,7 @@
       $('#btn-export').disabled = true;
       reportIntegrity(data.integrity, data.databaseHealth);
       await refreshDashboard();
+      await loadAnalysis();
     } catch (err) {
       toast(`${t('case.openFailed')}: ${errText(err)}`, 'error');
     }
@@ -820,16 +825,236 @@
     if (state.activeView === 'technical') renderTechnical();
   }
 
-  // Analysis and technical pages are populated by the analysis data model
-  // phase; until then they render an honest empty state rather than fake rows.
-  function renderAnalysis() {
-    for (const id of ['passages-list', 'claims-list', 'sources-list']) {
-      const el = $(`#${id}`);
-      if (el) el.innerHTML = '';
+  // Analysis page. Passages are taken from a selected transcript segment with an
+  // explicit context window; claims separate the words that were said from the
+  // meaning that is alleged; sources record how a claim was checked. Every row is
+  // anchored to the transcript revision it came from, so a later machine run
+  // cannot silently re-attach it to different text.
+  const VERIFICATION_LABELS = { PENDING: 'PENDING', VERIFIED: 'VERIFIED', NOT_VERIFIABLE: 'NOT_VERIFIABLE' };
+
+  async function loadAnalysis() {
+    if (!state.caseRecord) return;
+    try {
+      const [passages, claims, sources, verifications] = await Promise.all([
+        call(api.passages.list(state.caseRecord.case_id)),
+        call(api.claims.list(state.caseRecord.case_id)),
+        call(api.sources.list(state.caseRecord.case_id)),
+        call(api.verifications.list(state.caseRecord.case_id)),
+      ]);
+      state.passages = passages;
+      state.claims = claims;
+      state.sources = sources;
+      state.verifications = verifications;
+    } catch (err) {
+      state.passages = [];
+      state.claims = [];
+      state.sources = [];
+      state.verifications = [];
     }
-    for (const id of ['passages-empty', 'claims-empty', 'sources-empty']) {
-      const el = $(`#${id}`);
-      if (el) el.classList.remove('hidden');
+    renderAnalysis();
+  }
+
+  function renderAnalysis() {
+    const passagesList = $('#passages-list');
+    const claimsList = $('#claims-list');
+    const sourcesList = $('#sources-list');
+    if (!passagesList || !claimsList || !sourcesList) return;
+    passagesList.innerHTML = '';
+    claimsList.innerHTML = '';
+    sourcesList.innerHTML = '';
+
+    for (const p of state.passages) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const time = document.createElement('button');
+      time.className = 'ts';
+      time.textContent = formatClock(p.start_seconds);
+      time.title = t('player.playFromHere');
+      time.addEventListener('click', () => playSpan(p.start_seconds, p.end_seconds));
+      const meta = document.createElement('span');
+      meta.className = 'muted small';
+      meta.textContent = `${p.speech_act} · ${p.confidence} · ±${p.context_before_seconds}s`;
+      head.append(time, meta);
+      const text = document.createElement('div');
+      text.className = 'analysis-row-body';
+      text.textContent = p.text || '—';
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      actions.append(
+        actionButton(t('analysis.createClaim'), () => createClaimFromPassage(p), null, 'claim'),
+        actionButton(t('analysis.delete'), async () => {
+          try {
+            await call(api.passages.remove(p.passage_id));
+            state.passages = state.passages.filter((x) => x.passage_id !== p.passage_id);
+            renderAnalysis();
+            toast(t('analysis.passageDeleted'), 'success');
+          } catch (err) {
+            toast(`${t('error.findingDelete')}: ${errText(err)}`, 'error');
+          }
+        }, null, 'delete')
+      );
+      li.append(head, text, actions);
+      passagesList.appendChild(li);
+    }
+
+    for (const c of state.claims) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const stated = document.createElement('span');
+      stated.className = 'analysis-as-stated';
+      stated.textContent = `${t('analysis.asStated')}: ${c.as_stated || '—'}`;
+      const badge = document.createElement('span');
+      badge.className = `status ${c.verification === 'VERIFIED' ? 'VERIFIED' : c.verification === 'NOT_VERIFIABLE' ? 'REVIEWED' : 'AUTOMATIC'}`;
+      badge.textContent = c.verification;
+      head.append(stated, badge);
+      const meaning = document.createElement('div');
+      meaning.className = 'analysis-row-body';
+      meaning.textContent = `${t('analysis.allegedMeaning')}: ${c.alleged_meaning || '—'}`;
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      const vSelect = document.createElement('select');
+      vSelect.className = 'input input-small';
+      for (const v of Object.keys(VERIFICATION_LABELS)) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        if (v === c.verification) opt.selected = true;
+        vSelect.appendChild(opt);
+      }
+      vSelect.addEventListener('change', async () => {
+        try {
+          const updated = await call(api.claims.update(c.claim_id, { verification: vSelect.value }));
+          Object.assign(c, updated);
+          renderAnalysis();
+        } catch (err) {
+          toast(`${errText(err)}`, 'error');
+        }
+      });
+      actions.append(
+        vSelect,
+        actionButton(t('analysis.addSource'), () => addSourceToClaim(c), null, 'source'),
+        actionButton(t('analysis.delete'), async () => {
+          try {
+            await call(api.claims.remove(c.claim_id));
+            state.claims = state.claims.filter((x) => x.claim_id !== c.claim_id);
+            state.sources = state.sources.filter((s) => s.claim_id !== c.claim_id);
+            renderAnalysis();
+            toast(t('analysis.claimDeleted'), 'success');
+          } catch (err) {
+            toast(`${errText(err)}`, 'error');
+          }
+        }, null, 'delete')
+      );
+      li.append(head, meaning, actions);
+      claimsList.appendChild(li);
+    }
+
+    for (const s of state.sources) {
+      const li = document.createElement('li');
+      li.className = 'analysis-row';
+      const head = document.createElement('div');
+      head.className = 'analysis-row-head';
+      const title = document.createElement('span');
+      title.textContent = s.title || '—';
+      const kind = document.createElement('span');
+      kind.className = 'muted small';
+      kind.textContent = `${s.kind} · ${s.verification}`;
+      head.append(title, kind);
+      const body = document.createElement('div');
+      body.className = 'analysis-row-body';
+      body.textContent = [s.citation, s.supports].filter(Boolean).join(' — ') || '—';
+      const actions = document.createElement('div');
+      actions.className = 'analysis-row-actions';
+      actions.append(actionButton(t('analysis.delete'), async () => {
+        try {
+          await call(api.sources.remove(s.source_id));
+          state.sources = state.sources.filter((x) => x.source_id !== s.source_id);
+          renderAnalysis();
+          toast(t('analysis.sourceDeleted'), 'success');
+        } catch (err) {
+          toast(`${errText(err)}`, 'error');
+        }
+      }, null, 'delete'));
+      li.append(head, body, actions);
+      sourcesList.appendChild(li);
+    }
+
+    $('#passages-empty').classList.toggle('hidden', state.passages.length > 0);
+    $('#claims-empty').classList.toggle('hidden', state.claims.length > 0);
+    $('#sources-empty').classList.toggle('hidden', state.sources.length > 0);
+  }
+
+  function playSpan(start, end) {
+    if (state.duration <= 0) return;
+    audio.playSegment(start, end);
+  }
+
+  async function markPassage(seg) {
+    if (!state.caseRecord) return;
+    if (!state.activeEvidenceId) {
+      toast(t('analysis.noSegment'), 'error');
+      return;
+    }
+    let revisionId = null;
+    try {
+      const revs = await call(api.transcript.revisions(state.caseRecord.case_id, state.activeEvidenceId));
+      revisionId = revs && revs.currentRevision ? revs.currentRevision.revision_id : null;
+    } catch (err) {
+      revisionId = null;
+    }
+    try {
+      const passage = await call(api.passages.create(state.caseRecord.case_id, {
+        evidenceId: state.activeEvidenceId,
+        transcriptId: state.transcriptMeta ? state.transcriptMeta.transcript_id : null,
+        revisionId,
+        startSeconds: seg.start,
+        endSeconds: seg.end,
+        text: seg.text,
+        contextBeforeSeconds: 30,
+        contextAfterSeconds: 30,
+      }));
+      state.passages.push(passage);
+      renderAnalysis();
+      toast(t('analysis.passageAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
+    }
+  }
+
+  async function createClaimFromPassage(passage) {
+    try {
+      const claim = await call(api.claims.create(state.caseRecord.case_id, {
+        passageId: passage.passage_id,
+        asStated: passage.text,
+        allegedMeaning: '',
+      }));
+      state.claims.push(claim);
+      renderAnalysis();
+      toast(t('analysis.claimAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
+    }
+  }
+
+  async function addSourceToClaim(claim) {
+    const title = window.prompt(t('analysis.sourceTitle'));
+    if (title === null) return;
+    try {
+      const source = await call(api.sources.create(state.caseRecord.case_id, {
+        claimId: claim.claim_id,
+        passageId: claim.passage_id || null,
+        kind: 'SECONDARY',
+        title: title.trim(),
+      }));
+      state.sources.push(source);
+      renderAnalysis();
+      toast(t('analysis.sourceAdded'), 'success');
+    } catch (err) {
+      toast(`${errText(err)}`, 'error');
     }
   }
 
@@ -1701,6 +1926,7 @@
       mergeBtn,
       actionButton(t('seg.markReviewed'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.REVIEWED), null, 'reviewed'),
       actionButton(t('seg.markVerified'), () => state.store.setStatus(seg.segment_id, SEGMENT_STATUS.VERIFIED), null, 'verified'),
+      actionButton(t('analysis.markPassage'), () => markPassage(seg), null, 'passage'),
       actionButton(t('seg.speaker'), () => cycleSpeaker(seg), null, 'speaker'),
       ...flagButtons,
       actionButton(t('seg.delete'), () => state.store.deleteSegment(seg.segment_id), null, 'delete')

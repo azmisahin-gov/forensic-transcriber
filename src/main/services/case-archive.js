@@ -33,10 +33,11 @@ const { writeFileAtomic } = require('./atomic');
  */
 
 const ARCHIVE_FORMAT = 'forensic-transcriber-case-archive';
-// v2 adds transcript revisions and the run -> revision linkage. Both versions
+// v2 adds transcript revisions and the run -> revision linkage. v3 adds the
+// expert analysis layer (passages, claims, sources, verifications). All versions
 // remain readable: a v1 archive's segments are restored as a single revision.
-const ARCHIVE_VERSION = 2;
-const SUPPORTED_ARCHIVE_VERSIONS = [1, 2];
+const ARCHIVE_VERSION = 3;
+const SUPPORTED_ARCHIVE_VERSIONS = [1, 2, 3];
 
 function sha256Buffer(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -79,6 +80,10 @@ async function buildCaseArchive({ storage, caseId }) {
   const findings = storage.listFindings(caseId);
   const report = storage.getReport(caseId);
   const reportRevisions = storage.listReportRevisions(caseId);
+  const passages = storage.listPassages(caseId);
+  const claims = storage.listClaims(caseId);
+  const sources = storage.listSources(caseId);
+  const verifications = storage.listVerifications(caseId);
 
   const transcripts = [];
   for (const ev of evidence) {
@@ -101,7 +106,7 @@ async function buildCaseArchive({ storage, caseId }) {
   for (const rel of walkFiles(kase.case_dir, 'transcript')) addFile(rel.split(path.sep).join('/'), path.join(kase.case_dir, rel));
   for (const rel of walkFiles(kase.case_dir, 'exports')) addFile(rel.split(path.sep).join('/'), path.join(kase.case_dir, rel));
 
-  const caseData = { case: kase, evidence, transcripts, runs, history, notes, findings, report, report_revisions: reportRevisions };
+  const caseData = { case: kase, evidence, transcripts, runs, history, notes, findings, report, report_revisions: reportRevisions, passages, claims, sources, verifications };
   const caseJson = Buffer.from(`${JSON.stringify(caseData, null, 2)}\n`, 'utf8');
   entries.push({ name: 'database/case.json', data: caseJson });
   fileIndex.push({ path: 'database/case.json', sizeBytes: caseJson.length, sha256: sha256Buffer(caseJson) });
@@ -123,6 +128,10 @@ async function buildCaseArchive({ storage, caseId }) {
       notes: notes.length,
       findings: findings.length,
       report_revisions: reportRevisions.length,
+      passages: passages.length,
+      claims: claims.length,
+      sources: sources.length,
+      verifications: verifications.length,
       files: fileIndex.length,
     },
     // Each evidence entry records the hash of the imported copy as stored, so a
@@ -357,7 +366,73 @@ async function restoreCaseArchive({ storage, buffer }) {
   // 6. The report working row and its append-only revisions.
   storage.restoreReport(caseId, caseData.report || null, caseData.report_revisions || []);
 
+  // 7. Expert analysis layer (archive v3). Passages first so claims/sources/
+  //    verifications can be re-pointed through the passage and revision maps.
+  const passageIdMap = new Map();
+  const claimIdMap = new Map();
+  for (const passage of caseData.passages || []) {
+    const newEvidenceId = idMap.get(passage.evidence_id) || null;
+    const newRevisionId = passage.revision_id ? revisionIdMap.get(passage.revision_id) || null : null;
+    const newPassageId = storage.restorePassage(caseId, passage, { evidenceId: newEvidenceId, revisionId: newRevisionId });
+    passageIdMap.set(passage.passage_id, newPassageId);
+  }
+  for (const claim of caseData.claims || []) {
+    const newPassageId = claim.passage_id ? passageIdMap.get(claim.passage_id) || null : null;
+    claimIdMap.set(claim.claim_id, storage.restoreClaim(caseId, claim, { passageId: newPassageId }));
+  }
+  for (const source of caseData.sources || []) {
+    storage.restoreSource(caseId, source, {
+      claimId: source.claim_id ? claimIdMap.get(source.claim_id) || null : null,
+      passageId: source.passage_id ? passageIdMap.get(source.passage_id) || null : null,
+    });
+  }
+  for (const verification of caseData.verifications || []) {
+    storage.restoreVerification(caseId, verification, {
+      claimId: verification.claim_id ? claimIdMap.get(verification.claim_id) || null : null,
+      passageId: verification.passage_id ? passageIdMap.get(verification.passage_id) || null : null,
+    });
+  }
+
+  // 8. Replay the archived history with remapped references so the provenance
+  //    log points at the restored entities, not at ids that no longer exist.
+  for (const entry of caseData.history || []) {
+    const remapped = remapHistoryEntry(entry, {
+      evidence: idMap, transcript: transcriptIdMap, run: runIdMap,
+      revision: revisionIdMap, passage: passageIdMap, claim: claimIdMap,
+    });
+    storage.restoreHistory(caseId, entry, remapped);
+  }
+
   return { caseId, manifest, verified, evidenceIdMap: Object.fromEntries(idMap) };
+}
+
+/**
+ * Remap the ids a history row references. A history entry carries an opaque
+ * target plus a free-form detail object; the known id-bearing fields are remapped
+ * and anything unknown is left as-is rather than guessed.
+ */
+function remapHistoryEntry(entry, maps) {
+  const fieldMap = {
+    evidenceId: 'evidence', evidence_id: 'evidence',
+    transcriptId: 'transcript', transcript_id: 'transcript',
+    runId: 'run', run_id: 'run',
+    revisionId: 'revision', revision_id: 'revision',
+    passageId: 'passage', passage_id: 'passage',
+    claimId: 'claim', claim_id: 'claim',
+  };
+  const remapValue = (key, value) => {
+    const bucket = fieldMap[key];
+    if (!bucket || !value) return value;
+    const map = maps[bucket];
+    return map && map.has(value) ? map.get(value) : value;
+  };
+  const target = entry.target ? remapValue('evidence_id', entry.target) : null;
+  let detail = entry.detail;
+  if (detail && typeof detail === 'object') {
+    detail = { ...detail };
+    for (const key of Object.keys(detail)) detail[key] = remapValue(key, detail[key]);
+  }
+  return { target, detail };
 }
 
 module.exports = {

@@ -64,6 +64,34 @@ const api = {
     update: (findingId, patch) => ipcRenderer.invoke(IPC.FINDING_UPDATE, findingId, patch),
     remove: (findingId) => ipcRenderer.invoke(IPC.FINDING_DELETE, findingId),
   },
+  passages: {
+    list: (caseId) => ipcRenderer.invoke(IPC.PASSAGE_LIST, caseId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.PASSAGE_CREATE, caseId, input),
+    update: (passageId, patch) => ipcRenderer.invoke(IPC.PASSAGE_UPDATE, passageId, patch),
+    remove: (passageId) => ipcRenderer.invoke(IPC.PASSAGE_DELETE, passageId),
+  },
+  claims: {
+    list: (caseId) => ipcRenderer.invoke(IPC.CLAIM_LIST, caseId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.CLAIM_CREATE, caseId, input),
+    update: (claimId, patch) => ipcRenderer.invoke(IPC.CLAIM_UPDATE, claimId, patch),
+    remove: (claimId) => ipcRenderer.invoke(IPC.CLAIM_DELETE, claimId),
+  },
+  sources: {
+    list: (caseId) => ipcRenderer.invoke(IPC.SOURCE_LIST, caseId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.SOURCE_CREATE, caseId, input),
+    update: (sourceId, patch) => ipcRenderer.invoke(IPC.SOURCE_UPDATE, sourceId, patch),
+    remove: (sourceId) => ipcRenderer.invoke(IPC.SOURCE_DELETE, sourceId),
+  },
+  verifications: {
+    list: (caseId) => ipcRenderer.invoke(IPC.VERIFICATION_LIST, caseId),
+    create: (caseId, input) => ipcRenderer.invoke(IPC.VERIFICATION_CREATE, caseId, input),
+    update: (verificationId, patch) => ipcRenderer.invoke(IPC.VERIFICATION_UPDATE, verificationId, patch),
+    remove: (verificationId) => ipcRenderer.invoke(IPC.VERIFICATION_DELETE, verificationId),
+  },
+  analysis: {
+    context: (evidenceId, startSeconds, endSeconds, windowSeconds) =>
+      ipcRenderer.invoke(IPC.ANALYSIS_CONTEXT, evidenceId, startSeconds, endSeconds, windowSeconds),
+  },
   searchIndex: {
     rebuild: (caseId) => ipcRenderer.invoke(IPC.SEARCH_INDEX, caseId),
   },
