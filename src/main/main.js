@@ -918,8 +918,13 @@ function registerIpc() {
   handle(IPC.AI_GENERATE, async (_e, input = {}) => {
     const { caseId, evidenceId, action, prompt, revisionId } = input;
     requireCase(caseId);
-    const assistState = { enabled: storage.getPreference('ai_assist_enabled', false) === true };
-    return aiAssist.generate({ storage, caseId, evidenceId, action, prompt, revisionId, state: assistState });
+    const enabled = storage.getPreference('ai_assist_enabled', false) === true;
+    if (!enabled) {
+      const err = new Error('Local assist is disabled.');
+      err.code = 'AI_DISABLED';
+      throw err;
+    }
+    return aiAssist.generate({ storage, caseId, evidenceId, action, prompt, revisionId, state: { enabled } });
   });
 
   // UYAP delivery: assemble the report and transcript exports into a folder the
@@ -1860,6 +1865,58 @@ async function runAcceptanceTest() {
     // (available / selected / actually-used) must render from live state.
     await uiStep('workflow stepper renders eight steps', `(async () => {
       return document.querySelectorAll('#workflow-list .wf-step').length === 8;
+    })()`);
+
+    // PR-7/PR-8 surfaces: the technical run list, the operations centre, the
+    // Ctrl+K search palette and the delivery surface must all render from the
+    // real IPC data, not placeholder text.
+    await uiStep('technical view lists real transcription runs', `(async () => {
+      const res = await window.ft.cases.runs(${JSON.stringify(created.data.case_id)});
+      if (!res || res.ok !== true) return { __error: 'cases.runs failed' };
+      return Array.isArray(res.data);
+    })()`);
+
+    await uiStep('operations centre lists runs with a real count', `(async () => {
+      document.getElementById('btn-operations').click();
+      await new Promise((r) => setTimeout(r, 700));
+      const dlg = document.getElementById('dialog-operations');
+      if (!dlg.open) return { __error: 'operations dialog did not open' };
+      const rows = document.querySelectorAll('#ops-list .ops-row').length;
+      dlg.close();
+      return rows > 0;
+    })()`);
+
+    await uiStep('Ctrl+K opens the search palette', `(async () => {
+      document.getElementById('dialog-search').close();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 300));
+      const open = document.getElementById('dialog-search').open;
+      document.getElementById('dialog-search').close();
+      return open;
+    })()`);
+
+    await uiStep('delivery surface renders the real checklist', `(async () => {
+      document.getElementById('btn-delivery').click();
+      await new Promise((r) => setTimeout(r, 800));
+      const dlg = document.getElementById('dialog-delivery');
+      if (!dlg.open) return { __error: 'delivery dialog did not open' };
+      const items = document.querySelectorAll('#delivery-checklist li').length;
+      const outputs = document.querySelectorAll('#delivery-outputs .delivery-output').length;
+      dlg.close();
+      return items > 0 && outputs > 0;
+    })()`);
+
+    await uiStep('draft collector is off by default and does not write the report', `(async () => {
+      const st = await window.ft.ai.status();
+      if (!st || st.ok !== true) return { __error: 'ai.status failed' };
+      if (st.data.enabled !== false) return { __error: 'draft collector must default to off' };
+      const before = await window.ft.report.get(${JSON.stringify(created.data.case_id)});
+      const res = await window.ft.ai.generate({ caseId: ${JSON.stringify(created.data.case_id)}, action: 'report-draft' });
+      if (res.ok !== false || !res.error || res.error.code !== 'AI_DISABLED') return { __error: 'disabled collector must refuse' };
+      const after = await window.ft.report.get(${JSON.stringify(created.data.case_id)});
+      const b = before && before.data ? JSON.stringify(before.data.sections || []) : '';
+      const a = after && after.data ? JSON.stringify(after.data.sections || []) : '';
+      return b === a;
     })()`);
 
     await uiStep('runtime panel separates available/selected/used', `(async () => {
