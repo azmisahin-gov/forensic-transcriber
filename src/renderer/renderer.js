@@ -39,6 +39,7 @@
     engineProbe: null,
     lastRunMode: null,
     dashboard: null,
+    activeView: 'studio',
     notes: [],
     findings: [],
     report: null,
@@ -678,6 +679,7 @@
       renderEvidenceList();
       showReview(null);
       renderCaseList();
+      setActiveView('studio');
       $('#btn-save').disabled = true;
       $('#btn-export').disabled = true;
       reportIntegrity(data.integrity, data.databaseHealth);
@@ -750,25 +752,35 @@
    * The eight-step expert workflow (Görevlendirme → Teslim). Step status is
    * derived from the live dashboard counts so it always matches the case, and
    * the first step that still has work is marked as the current step.
+   *
+   * Steps are clickable and route to a view; the mapping keeps the existing
+   * single-studio layout for the transcription/review steps and adds dedicated
+   * pages for assignment, analysis and technical review.
    */
+  function workflowSteps() {
+    const d = state.dashboard;
+    return [
+      { n: '01', label: t('workflow.01'), status: !d ? 'pending' : d.missing_assignment_fields === 0 ? 'done' : 'current', view: 'assignment' },
+      { n: '02', label: t('workflow.02'), status: !d || d.evidence === 0 ? 'current' : 'done', view: 'studio' },
+      { n: '03', label: t('workflow.03'), status: !d || d.evidence === 0 ? 'pending' : d.transcribed === d.evidence ? 'done' : 'current', view: 'studio' },
+      { n: '04', label: t('workflow.04'), status: !d || d.transcribed === 0 ? 'pending' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current', view: 'studio' },
+      { n: '05', label: t('workflow.05'), status: !d || d.transcribed === 0 ? 'pending' : d.unclear_segments > 0 ? 'warn' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current', view: 'analysis' },
+      { n: '06', label: t('workflow.06'), status: !d ? 'pending' : d.has_report ? 'done' : d.transcribed > 0 ? 'current' : 'pending', view: 'technical' },
+      { n: '07', label: t('workflow.07'), status: !d ? 'pending' : d.failed_runs > 0 ? 'warn' : d.has_report ? 'current' : 'pending', view: 'studio' },
+      { n: '08', label: t('workflow.08'), status: !d ? 'pending' : d.deliveries > 0 ? 'done' : d.has_report ? 'current' : 'pending', view: 'studio' },
+    ];
+  }
+
   function renderWorkflow() {
     const ol = $('#workflow-list');
     if (!ol) return;
     ol.innerHTML = '';
-    const d = state.dashboard;
-    const steps = [
-      { n: '01', label: t('workflow.01'), status: !d ? 'pending' : d.missing_assignment_fields === 0 ? 'done' : 'current' },
-      { n: '02', label: t('workflow.02'), status: !d || d.evidence === 0 ? 'current' : 'done' },
-      { n: '03', label: t('workflow.03'), status: !d || d.evidence === 0 ? 'pending' : d.transcribed === d.evidence ? 'done' : 'current' },
-      { n: '04', label: t('workflow.04'), status: !d || d.transcribed === 0 ? 'pending' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
-      { n: '05', label: t('workflow.05'), status: !d || d.transcribed === 0 ? 'pending' : d.unclear_segments > 0 ? 'warn' : d.reviewed + d.verified >= d.transcribed ? 'done' : 'current' },
-      { n: '06', label: t('workflow.06'), status: !d ? 'pending' : d.has_report ? 'done' : d.transcribed > 0 ? 'current' : 'pending' },
-      { n: '07', label: t('workflow.07'), status: !d ? 'pending' : d.failed_runs > 0 ? 'warn' : d.has_report ? 'current' : 'pending' },
-      { n: '08', label: t('workflow.08'), status: !d ? 'pending' : d.deliveries > 0 ? 'done' : d.has_report ? 'current' : 'pending' },
-    ];
-    for (const step of steps) {
+    for (const step of workflowSteps()) {
       const li = document.createElement('li');
       li.className = `wf-step ${step.status}`;
+      li.dataset.view = step.view;
+      li.tabIndex = 0;
+      li.title = step.label;
       const num = document.createElement('span');
       num.className = 'wf-num';
       num.textContent = step.n;
@@ -779,8 +791,76 @@
       badge.className = 'wf-badge';
       badge.textContent = t(`workflow.${step.status === 'current' ? 'current' : step.status === 'warn' ? 'warn' : step.status === 'done' ? 'done' : 'pending'}`);
       li.append(num, label, badge);
+      const go = () => setActiveView(step.view);
+      li.addEventListener('click', go);
+      li.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          go();
+        }
+      });
       ol.appendChild(li);
     }
+    for (const li of document.querySelectorAll('#workflow-list .wf-step')) {
+      li.classList.toggle('active', li.dataset.view === state.activeView);
+    }
+  }
+
+  /** Switch the visible case page. Views are additive; the studio stays default. */
+  function setActiveView(view) {
+    const known = ['assignment', 'studio', 'analysis', 'technical'];
+    state.activeView = known.includes(view) ? view : 'studio';
+    for (const page of document.querySelectorAll('.case-view-page')) {
+      page.classList.toggle('hidden', page.id !== `view-${state.activeView}`);
+    }
+    for (const li of document.querySelectorAll('#workflow-list .wf-step')) {
+      li.classList.toggle('active', li.dataset.view === state.activeView);
+    }
+    if (state.activeView === 'analysis') renderAnalysis();
+    if (state.activeView === 'technical') renderTechnical();
+  }
+
+  // Analysis and technical pages are populated by the analysis data model
+  // phase; until then they render an honest empty state rather than fake rows.
+  function renderAnalysis() {
+    for (const id of ['passages-list', 'claims-list', 'sources-list']) {
+      const el = $(`#${id}`);
+      if (el) el.innerHTML = '';
+    }
+    for (const id of ['passages-empty', 'claims-empty', 'sources-empty']) {
+      const el = $(`#${id}`);
+      if (el) el.classList.remove('hidden');
+    }
+  }
+
+  function renderTechnical() {
+    const body = $('#technical-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const ev = state.evidence.find((e) => e.evidence_id === state.activeEvidenceId);
+    const grid = document.createElement('dl');
+    grid.className = 'technical-grid';
+    const rows = ev
+      ? [
+          [t('evidence.container'), ev.format || 'unknown'],
+          [t('evidence.codec'), ev.codec || 'unknown'],
+          [t('evidence.duration'), ev.duration_seconds != null ? formatClock(ev.duration_seconds) : 'unknown'],
+          [t('evidence.sampleRate'), ev.sample_rate ? `${ev.sample_rate} Hz` : 'unknown'],
+          [t('evidence.channels'), ev.channels != null ? String(ev.channels) : 'unknown'],
+          [t('evidence.streams'), ev.audio_stream_count != null ? String(ev.audio_stream_count) : 'unknown'],
+          [t('evidence.sha'), ev.sha256],
+        ]
+      : [[t('technical.noEvidence'), t('evidence.selectPrompt')]];
+    for (const [k, v] of rows) {
+      const wrap = document.createElement('div');
+      const dt = document.createElement('dt');
+      dt.textContent = k;
+      const dd = document.createElement('dd');
+      dd.textContent = v;
+      wrap.append(dt, dd);
+      grid.appendChild(wrap);
+    }
+    body.appendChild(grid);
   }
 
   // ------------------------------------------------------------- case intake

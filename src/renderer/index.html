@@ -110,133 +110,171 @@
           <ol id="workflow-list"></ol>
         </nav>
 
-        <section id="case-dashboard" class="case-dashboard" aria-label="Case dashboard">
-          <div class="dash-head">
-            <h2 data-i18n="case.dashboard">Dosya özeti</h2>
-            <span id="dash-updated" class="muted small"></span>
-          </div>
-          <dl id="dash-grid" class="dash-grid"></dl>
-          <div class="dash-actions">
-            <button id="btn-edit-case" class="btn btn-small" type="button" data-i18n="case.editAssignment">Görevlendirmeyi düzenle…</button>
-          </div>
-        </section>
+        <div id="case-views" class="case-views">
+          <section id="view-assignment" class="case-view-page hidden" aria-label="Assignment">
+            <section id="case-dashboard" class="case-dashboard" aria-label="Case dashboard">
+              <div class="dash-head">
+                <h2 data-i18n="case.dashboard">Dosya özeti</h2>
+                <span id="dash-updated" class="muted small"></span>
+              </div>
+              <dl id="dash-grid" class="dash-grid"></dl>
+              <div class="dash-actions">
+                <button id="btn-edit-case" class="btn btn-small" type="button" data-i18n="case.editAssignment">Görevlendirmeyi düzenle…</button>
+              </div>
+            </section>
+          </section>
 
-        <div class="panes">
-          <aside class="evidence-pane">
-            <div class="pane-head">
-              <h2 data-i18n="evidence.heading">İNCELENEN MEDYA</h2>
-              <button id="btn-import" class="btn btn-small" type="button" data-i18n="evidence.import">Materyal ekle</button>
+          <section id="view-analysis" class="case-view-page hidden" aria-label="Analysis">
+            <div class="page-head">
+              <h2 data-i18n="analysis.heading">Kritik pasajlar ve iddia matrisi</h2>
+              <p class="muted small" data-i18n="analysis.lede">Kayıtta söylenen söz ile ileri sürülen anlamı ayırın; her pasajı bağlamıyla ve doğrulama durumuyla kaydedin.</p>
             </div>
-            <ul id="evidence-list" class="evidence-list"></ul>
-            <div id="drop-zone" class="drop-zone">
-              <p data-i18n="evidence.dropHint">Ses veya görüntü dosyasını buraya bırakın</p>
-              <p class="muted small" data-i18n="evidence.dropFormats">WAV · MP3 · M4A · FLAC · OGG · MP4 · MOV · MKV</p>
-            </div>
-          </aside>
-
-          <div class="review-pane">
-            <div id="review-placeholder" class="review-placeholder">
-              <p data-i18n="evidence.selectPrompt">Meta verileri görmek ve transkripsiyon yapmak için bir kayıt seçin.</p>
-            </div>
-
-            <div id="review" class="review hidden">
-              <section class="meta-panel">
-                <h3 id="ev-name">—</h3>
-                <dl class="meta-grid" id="ev-meta"></dl>
-                <div class="meta-actions">
-                  <button id="btn-reveal" class="btn btn-small" type="button" data-i18n="evidence.showOriginal">Orijinali göster</button>
-                  <button id="btn-delete-evidence" class="btn btn-small btn-danger" type="button" data-i18n="evidence.remove">Kaldır</button>
-                </div>
+            <div class="analysis-cols">
+              <section class="analysis-col">
+                <h3 data-i18n="analysis.passages">Kritik pasajlar</h3>
+                <ul id="passages-list" class="analysis-list"></ul>
+                <p id="passages-empty" class="muted small" data-i18n="analysis.noPassages">Henüz kritik pasaj yok. Transkriptte bir segmenti seçip "Kritik işaretle" ile ekleyin.</p>
               </section>
-
-              <section class="transcribe-panel">
-                <div class="transcribe-row">
-                  <label class="field">
-                    <span data-i18n="transcribe.model">Model</span>
-                    <select id="select-model"></select>
-                  </label>
-                  <label class="field field-inline">
-                    <input type="checkbox" id="chk-gpu" checked />
-                    <span data-i18n="transcribe.useGpu">Varsa GPU kullan</span>
-                  </label>
-                  <label class="field field-inline">
-                    <input type="checkbox" id="chk-vad" checked />
-                    <span data-i18n="transcribe.vad">Ses etkinliği algılama (VAD)</span>
-                  </label>
-                  <button id="btn-transcribe" class="btn btn-primary" type="button" data-i18n="transcribe.start">Transkripsiyon</button>
-                  <button id="btn-cancel" class="btn btn-danger hidden" type="button" data-i18n="transcribe.cancel">İptal</button>
-                </div>
-                <div id="runtime-panel" class="runtime-panel" aria-label="Runtime"></div>
-                <p id="engine-status" class="engine-status small muted"></p>
-                <div id="progress-wrap" class="progress-wrap hidden">
-                  <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
-                  <span id="progress-label" class="small muted" data-i18n="transcribe.preparing">Hazırlanıyor…</span>
-                </div>
-                <div id="transcribe-error" class="error-box hidden" role="alert">
-                  <div class="error-box-head">
-                    <strong id="transcribe-error-title" data-i18n="error.transcriptionFailed">Transkripsiyon başarısız</strong>
-                  </div>
-                  <p id="transcribe-error-body" class="small" data-i18n="error.transcriptionFailedBody"></p>
-                  <pre id="transcribe-error-detail" class="error-detail hidden"></pre>
-                  <div class="error-box-actions">
-                    <button id="btn-transcribe-retry" class="btn btn-small btn-primary" type="button" data-i18n="progress.retry">Tekrar dene</button>
-                    <button id="btn-transcribe-error-details" class="btn btn-small" type="button" data-i18n="progress.errorDetail">Teknik ayrıntılar</button>
-                    <button id="btn-transcribe-error-close" class="btn btn-small btn-ghost" type="button" data-i18n="progress.close">Kapat</button>
-                  </div>
-                </div>
+              <section class="analysis-col">
+                <h3 data-i18n="analysis.claims">İddia matrisi</h3>
+                <ul id="claims-list" class="analysis-list"></ul>
+                <p id="claims-empty" class="muted small" data-i18n="analysis.noClaims">Henüz iddia yok. Bir pasajdan iddia oluşturun.</p>
               </section>
-
-              <section class="player-panel">
-                <canvas id="waveform" class="waveform" height="96"></canvas>
-                <div class="player-controls">
-                  <button id="btn-play" class="btn btn-icon" data-i18n-attr="title:player.play" title="Oynat / Duraklat (Boşluk)" type="button">▶</button>
-                  <button id="btn-back5" class="btn btn-icon" data-i18n-attr="title:player.back" title="5 sn geri (←)" type="button">−5s</button>
-                  <button id="btn-fwd5" class="btn btn-icon" data-i18n-attr="title:player.forward" title="5 sn ileri (→)" type="button">+5s</button>
-                  <span id="time-display" class="mono">00:00:00.000</span>
-                  <label class="field field-inline">
-                    <span data-i18n="player.speed">Hız</span>
-                    <select id="select-speed">
-                      <option value="0.5">0.5×</option>
-                      <option value="0.75">0.75×</option>
-                      <option value="1" selected>1×</option>
-                      <option value="1.25">1.25×</option>
-                      <option value="1.5">1.5×</option>
-                      <option value="2">2×</option>
-                    </select>
-                  </label>
-                  <span class="spacer"></span>
-                  <label class="field field-inline">
-                    <span data-i18n="player.speakers">Konuşmacılar</span>
-                    <input id="speaker-input" class="input input-small" type="text" placeholder="SPEAKER_01,SPEAKER_02" />
-                  </label>
-                </div>
-              </section>
-
-              <section class="transcript-panel">
-                <div class="transcript-toolbar">
-                  <h3 data-i18n="transcript.heading">Transkript</h3>
-                  <span id="transcript-stats" class="muted small"></span>
-                  <span class="spacer"></span>
-                  <label class="field field-inline">
-                    <span data-i18n="transcript.filter">Filtre</span>
-                    <select id="select-filter">
-                      <option value="all" data-i18n="transcript.filterAll">Tüm segmentler</option>
-                      <option value="unclear" data-i18n="transcript.filterUnclear">Belirsiz / işaretli</option>
-                      <option value="unreviewed" data-i18n="transcript.filterUnreviewed">İncelenmemiş (makine)</option>
-                      <option value="low-confidence" data-i18n="transcript.filterLowConfidence">Düşük güven</option>
-                      <option value="edited" data-i18n="transcript.filterEdited">Düzenlenen</option>
-                      <option value="verified" data-i18n="transcript.filterVerified">Doğrulanan</option>
-                    </select>
-                  </label>
-                  <input id="search-input" class="input input-small" type="search" data-i18n-attr="placeholder:transcript.search" placeholder="Bu transkriptte ara…" />
-                  <button id="btn-undo" class="btn btn-small" data-i18n-attr="title:transcript.undo" title="Geri al (Ctrl+Z)" type="button" disabled data-i18n="transcript.undo">Geri al</button>
-                  <button id="btn-redo" class="btn btn-small" data-i18n-attr="title:transcript.redo" title="Yinele (Ctrl+Shift+Z)" type="button" disabled data-i18n="transcript.redo">Yinele</button>
-                </div>
-                <p id="filter-note" class="muted small hidden"></p>
-                <div id="transcript-list" class="transcript-list"></div>
+              <section class="analysis-col">
+                <h3 data-i18n="analysis.sources">Dış kaynak ve doğrulama</h3>
+                <ul id="sources-list" class="analysis-list"></ul>
+                <p id="sources-empty" class="muted small" data-i18n="analysis.noSources">Henüz dış kaynak yok. Doğrulama için birincil/bağımsız kaynak ekleyin.</p>
               </section>
             </div>
-          </div>
+          </section>
+
+          <section id="view-technical" class="case-view-page hidden" aria-label="Technical review">
+            <div class="page-head">
+              <h2 data-i18n="technical.heading">Teknik ön inceleme</h2>
+              <p class="muted small" data-i18n="technical.lede">Yalnızca gözlem: kapsayıcı, akış, örnekleme ve çalıştırma kayıtları. Özgünlük veya hukuki nitelendirme üretilmez.</p>
+            </div>
+            <div id="technical-body" class="technical-body"></div>
+          </section>
+
+          <section id="view-studio" class="case-view-page">
+            <div class="panes">
+              <aside class="evidence-pane">
+                <div class="pane-head">
+                  <h2 data-i18n="evidence.heading">İNCELENEN MEDYA</h2>
+                  <button id="btn-import" class="btn btn-small" type="button" data-i18n="evidence.import">Materyal ekle</button>
+                </div>
+                <ul id="evidence-list" class="evidence-list"></ul>
+                <div id="drop-zone" class="drop-zone">
+                  <p data-i18n="evidence.dropHint">Ses veya görüntü dosyasını buraya bırakın</p>
+                  <p class="muted small" data-i18n="evidence.dropFormats">WAV · MP3 · M4A · FLAC · OGG · MP4 · MOV · MKV</p>
+                </div>
+              </aside>
+
+              <div class="review-pane">
+                <div id="review-placeholder" class="review-placeholder">
+                  <p data-i18n="evidence.selectPrompt">Meta verileri görmek ve transkripsiyon yapmak için bir kayıt seçin.</p>
+                </div>
+
+                <div id="review" class="review hidden">
+                  <section class="meta-panel">
+                    <h3 id="ev-name">—</h3>
+                    <dl class="meta-grid" id="ev-meta"></dl>
+                    <div class="meta-actions">
+                      <button id="btn-reveal" class="btn btn-small" type="button" data-i18n="evidence.showOriginal">Orijinali göster</button>
+                      <button id="btn-delete-evidence" class="btn btn-small btn-danger" type="button" data-i18n="evidence.remove">Kaldır</button>
+                    </div>
+                  </section>
+
+                  <section class="transcribe-panel">
+                    <div class="transcribe-row">
+                      <label class="field">
+                        <span data-i18n="transcribe.model">Model</span>
+                        <select id="select-model"></select>
+                      </label>
+                      <label class="field field-inline">
+                        <input type="checkbox" id="chk-gpu" checked />
+                        <span data-i18n="transcribe.useGpu">Varsa GPU kullan</span>
+                      </label>
+                      <label class="field field-inline">
+                        <input type="checkbox" id="chk-vad" checked />
+                        <span data-i18n="transcribe.vad">Ses etkinliği algılama (VAD)</span>
+                      </label>
+                      <button id="btn-transcribe" class="btn btn-primary" type="button" data-i18n="transcribe.start">Transkripsiyon</button>
+                      <button id="btn-cancel" class="btn btn-danger hidden" type="button" data-i18n="transcribe.cancel">İptal</button>
+                    </div>
+                    <div id="runtime-panel" class="runtime-panel" aria-label="Runtime"></div>
+                    <p id="engine-status" class="engine-status small muted"></p>
+                    <div id="progress-wrap" class="progress-wrap hidden">
+                      <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+                      <span id="progress-label" class="small muted" data-i18n="transcribe.preparing">Hazırlanıyor…</span>
+                    </div>
+                    <div id="transcribe-error" class="error-box hidden" role="alert">
+                      <div class="error-box-head">
+                        <strong id="transcribe-error-title" data-i18n="error.transcriptionFailed">Transkripsiyon başarısız</strong>
+                      </div>
+                      <p id="transcribe-error-body" class="small" data-i18n="error.transcriptionFailedBody"></p>
+                      <pre id="transcribe-error-detail" class="error-detail hidden"></pre>
+                      <div class="error-box-actions">
+                        <button id="btn-transcribe-retry" class="btn btn-small btn-primary" type="button" data-i18n="progress.retry">Tekrar dene</button>
+                        <button id="btn-transcribe-error-details" class="btn btn-small" type="button" data-i18n="progress.errorDetail">Teknik ayrıntılar</button>
+                        <button id="btn-transcribe-error-close" class="btn btn-small btn-ghost" type="button" data-i18n="progress.close">Kapat</button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="player-panel">
+                    <canvas id="waveform" class="waveform" height="96"></canvas>
+                    <div class="player-controls">
+                      <button id="btn-play" class="btn btn-icon" data-i18n-attr="title:player.play" title="Oynat / Duraklat (Boşluk)" type="button">▶</button>
+                      <button id="btn-back5" class="btn btn-icon" data-i18n-attr="title:player.back" title="5 sn geri (←)" type="button">−5s</button>
+                      <button id="btn-fwd5" class="btn btn-icon" data-i18n-attr="title:player.forward" title="5 sn ileri (→)" type="button">+5s</button>
+                      <span id="time-display" class="mono">00:00:00.000</span>
+                      <label class="field field-inline">
+                        <span data-i18n="player.speed">Hız</span>
+                        <select id="select-speed">
+                          <option value="0.5">0.5×</option>
+                          <option value="0.75">0.75×</option>
+                          <option value="1" selected>1×</option>
+                          <option value="1.25">1.25×</option>
+                          <option value="1.5">1.5×</option>
+                          <option value="2">2×</option>
+                        </select>
+                      </label>
+                      <span class="spacer"></span>
+                      <label class="field field-inline">
+                        <span data-i18n="player.speakers">Konuşmacılar</span>
+                        <input id="speaker-input" class="input input-small" type="text" placeholder="SPEAKER_01,SPEAKER_02" />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section class="transcript-panel">
+                    <div class="transcript-toolbar">
+                      <h3 data-i18n="transcript.heading">Transkript</h3>
+                      <span id="transcript-stats" class="muted small"></span>
+                      <span class="spacer"></span>
+                      <label class="field field-inline">
+                        <span data-i18n="transcript.filter">Filtre</span>
+                        <select id="select-filter">
+                          <option value="all" data-i18n="transcript.filterAll">Tüm segmentler</option>
+                          <option value="unclear" data-i18n="transcript.filterUnclear">Belirsiz / işaretli</option>
+                          <option value="unreviewed" data-i18n="transcript.filterUnreviewed">İncelenmemiş (makine)</option>
+                          <option value="low-confidence" data-i18n="transcript.filterLowConfidence">Düşük güven</option>
+                          <option value="edited" data-i18n="transcript.filterEdited">Düzenlenen</option>
+                          <option value="verified" data-i18n="transcript.filterVerified">Doğrulanan</option>
+                        </select>
+                      </label>
+                      <input id="search-input" class="input input-small" type="search" data-i18n-attr="placeholder:transcript.search" placeholder="Bu transkriptte ara…" />
+                      <button id="btn-undo" class="btn btn-small" data-i18n-attr="title:transcript.undo" title="Geri al (Ctrl+Z)" type="button" disabled data-i18n="transcript.undo">Geri al</button>
+                      <button id="btn-redo" class="btn btn-small" data-i18n-attr="title:transcript.redo" title="Yinele (Ctrl+Shift+Z)" type="button" disabled data-i18n="transcript.redo">Yinele</button>
+                    </div>
+                    <p id="filter-note" class="muted small hidden"></p>
+                    <div id="transcript-list" class="transcript-list"></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
     </main>
