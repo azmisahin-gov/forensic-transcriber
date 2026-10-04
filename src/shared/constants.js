@@ -172,6 +172,13 @@
     DIALOG_OPEN_DIRECTORY: 'dialog:openDirectory',
   });
 
+  // Local UI appearance. Stored as preferences and applied to the document
+  // root; light is the default so a first launch is readable in a bright office.
+  const THEMES = Object.freeze({ LIGHT: 'light', DARK: 'dark' });
+  const THEME_VALUES = Object.freeze(Object.values(THEMES));
+  const ACCENTS = Object.freeze({ BLUE: 'blue', TEAL: 'teal', INDIGO: 'indigo' });
+  const ACCENT_VALUES = Object.freeze(Object.values(ACCENTS));
+
   return {
     SEGMENT_STATUS,
     SEGMENT_STATUS_VALUES,
@@ -183,6 +190,10 @@
     REVIEW_FLAGS,
     REVIEW_FLAG_VALUES,
     NOTE_KIND,
+    THEMES,
+    THEME_VALUES,
+    ACCENTS,
+    ACCENT_VALUES,
     UNCLEAR_PLACEHOLDER,
     TRANSCRIPT_SCHEMA_VERSION,
     CASE_SCHEMA_VERSION,

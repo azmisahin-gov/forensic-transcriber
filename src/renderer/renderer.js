@@ -9,6 +9,7 @@
   const { drawWaveform, resamplePeaks, xToTime } = FT_WAVEFORM;
   const { FILTERS, filterSegments, highlightParts } = FT_SEARCH;
   const { translate, normalize: normalizeLocale, DEFAULT_LOCALE } = FT_I18N;
+  const { apply: applyTheme, normalizeTheme, normalizeAccent } = FT_THEME;
 
   const FLAG_OPTIONS = ['UNCLEAR', 'REVISIT', 'REVIEW'];
 
@@ -18,6 +19,8 @@
   const state = {
     appInfo: null,
     locale: DEFAULT_LOCALE,
+    theme: normalizeTheme('light'),
+    accent: normalizeAccent('blue'),
     cases: [],
     caseRecord: null,
     evidence: [],
@@ -68,6 +71,33 @@
         if (attr && key) el.setAttribute(attr, t(key));
       }
     }
+  }
+
+  // ------------------------------------------------------------- appearance
+  /** Reflect the active theme/accent on the document root and the switches. */
+  function renderPrefControls() {
+    const applied = applyTheme(document.documentElement, { theme: state.theme, accent: state.accent });
+    state.theme = applied.theme;
+    state.accent = applied.accent;
+    const light = $('#btn-theme-light');
+    const dark = $('#btn-theme-dark');
+    if (light) light.classList.toggle('active', state.theme === 'light');
+    if (dark) dark.classList.toggle('active', state.theme === 'dark');
+    for (const dot of document.querySelectorAll('.accent-dots button[data-accent]')) {
+      dot.classList.toggle('active', dot.getAttribute('data-accent') === state.accent);
+    }
+  }
+
+  async function setTheme(theme) {
+    state.theme = normalizeTheme(theme);
+    renderPrefControls();
+    try { await call(api.preferences.set('theme', state.theme)); } catch { /* best-effort */ }
+  }
+
+  async function setAccent(accent) {
+    state.accent = normalizeAccent(accent);
+    renderPrefControls();
+    try { await call(api.preferences.set('accent', state.accent)); } catch { /* best-effort */ }
   }
 
   async function setLocale(locale) {
@@ -146,9 +176,12 @@
     try {
       const prefs = await call(api.preferences.all());
       if (prefs && prefs.locale) state.locale = normalizeLocale(prefs.locale);
+      if (prefs && prefs.theme) state.theme = normalizeTheme(prefs.theme);
+      if (prefs && prefs.accent) state.accent = normalizeAccent(prefs.accent);
     } catch {
       /* preferences are optional */
     }
+    renderPrefControls();
     applyTranslations();
     const localeSel = $('#select-locale');
     if (localeSel) localeSel.value = state.locale;
@@ -172,7 +205,7 @@
    * wired to handlers. A crashed renderer leaves this object absent or failed.
    */
   function markBootReady() {
-    const requiredGlobals = ['FT_CONSTANTS', 'FT_I18N', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM', 'FT_SEARCH'];
+    const requiredGlobals = ['FT_CONSTANTS', 'FT_I18N', 'FT_FORMAT', 'FT_TRANSCRIPT_STORE', 'FT_AUDIO', 'FT_WAVEFORM', 'FT_SEARCH', 'FT_THEME'];
     const missingGlobals = requiredGlobals.filter((name) => typeof window[name] === 'undefined');
     const requiredControls = [
       'btn-new-case', 'btn-models', 'btn-about', 'btn-update-check',
@@ -180,7 +213,7 @@
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
       'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
-      'select-locale',
+      'select-locale', 'btn-theme-light', 'btn-theme-dark',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
     const controls = {};
@@ -2052,6 +2085,14 @@
       localeSel.addEventListener('change', (e) => setLocale(e.target.value));
       localeSel.value = state.locale;
       wiredControls.add(localeSel.id);
+    }
+
+    // Theme and accent switches. The choice is applied immediately and stored
+    // locally; it never leaves the machine.
+    bind('#btn-theme-light', 'click', () => setTheme('light'));
+    bind('#btn-theme-dark', 'click', () => setTheme('dark'));
+    for (const dot of document.querySelectorAll('.accent-dots button[data-accent]')) {
+      dot.addEventListener('click', () => setAccent(dot.getAttribute('data-accent')));
     }
 
     // Import queue controls.

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="tr" data-theme="light" data-accent="blue">
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
@@ -32,6 +32,17 @@
         <button id="btn-update" class="btn btn-ghost hidden" type="button" data-i18n="app.update">Güncelle</button>
         <button id="btn-about" class="btn btn-ghost" type="button" data-i18n="app.about">Hakkında</button>
         <button id="btn-models" class="btn btn-ghost" type="button" data-i18n="app.models">Modeller</button>
+        <div class="pref-controls" id="pref-controls">
+          <div class="theme-toggle" role="group" aria-label="Theme" data-i18n-attr="aria-label:pref.theme">
+            <button id="btn-theme-light" type="button" title="Açık tema" data-i18n-attr="title:pref.light">☀</button>
+            <button id="btn-theme-dark" type="button" title="Koyu tema" data-i18n-attr="title:pref.dark">☾</button>
+          </div>
+          <div class="accent-dots" role="group" aria-label="Accent" data-i18n-attr="aria-label:pref.accent">
+            <button type="button" data-accent="blue" title="Mavi" data-i18n-attr="title:pref.blue"></button>
+            <button type="button" data-accent="teal" title="Teal" data-i18n-attr="title:pref.teal"></button>
+            <button type="button" data-accent="indigo" title="Indigo" data-i18n-attr="title:pref.indigo"></button>
+          </div>
+        </div>
         <button id="btn-new-case" class="btn btn-primary" type="button" data-i18n="app.newCase">Yeni Dosya</button>
       </div>
     </header>
@@ -506,6 +517,7 @@
   <script src="lib/waveform.js"></script>
   <script src="lib/search.js"></script>
   <script src="lib/shortcuts.js"></script>
+  <script src="lib/theme.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

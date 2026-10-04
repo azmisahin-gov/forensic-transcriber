@@ -92,10 +92,13 @@ test('constants.js defines the globals the renderer depends on', () => {
   const sandbox = runAsBrowserScript(constantsFile, {});
   const c = sandbox.FT_CONSTANTS;
   assert.ok(c, 'FT_CONSTANTS must be defined');
-  for (const key of ['SEGMENT_STATUS', 'UNCLEAR_PLACEHOLDER', 'IPC', 'SUPPORTED_EXTENSIONS']) {
+  for (const key of ['SEGMENT_STATUS', 'UNCLEAR_PLACEHOLDER', 'IPC', 'SUPPORTED_EXTENSIONS', 'THEMES', 'ACCENTS']) {
     assert.ok(c[key], `FT_CONSTANTS.${key} must be present`);
   }
   assert.equal(c.SEGMENT_STATUS.AUTOMATIC, 'AUTOMATIC');
+  assert.equal(c.THEMES.LIGHT, 'light');
+  assert.equal(c.THEMES.DARK, 'dark');
+  assert.deepEqual([...c.ACCENT_VALUES], ['blue', 'teal', 'indigo']);
 });
 
 test('the other renderer libs define their globals in the browser', () => {
@@ -105,9 +108,15 @@ test('the other renderer libs define their globals in the browser', () => {
     ['lib/waveform.js', 'FT_WAVEFORM'],
     ['lib/search.js', 'FT_SEARCH'],
     ['lib/shortcuts.js', 'FT_SHORTCUTS'],
+    ['lib/theme.js', 'FT_THEME'],
   ];
   for (const [rel, globalName] of libs) {
-    const sandbox = runAsBrowserScript(path.join(REPO_ROOT, 'src', 'renderer', rel), {});
+    // theme.js validates against FT_CONSTANTS the same way transcript-store.js
+    // does; load the real constants first so the UMD wrapper resolves.
+    const globals = rel === 'lib/theme.js'
+      ? { FT_CONSTANTS: runAsBrowserScript(path.join(REPO_ROOT, 'src', 'shared', 'constants.js'), {}).FT_CONSTANTS }
+      : {};
+    const sandbox = runAsBrowserScript(path.join(REPO_ROOT, 'src', 'renderer', rel), globals);
     assert.ok(sandbox[globalName], `${rel} must define ${globalName}`);
   }
 });
