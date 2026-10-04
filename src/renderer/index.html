@@ -93,6 +93,7 @@
           </div>
           <div class="case-header-actions">
             <button id="btn-search" class="btn" type="button" data-i18n="case.search">Dosyada ara…</button>
+            <button id="btn-operations" class="btn" type="button" data-i18n="case.operations">İşlemler</button>
             <button id="btn-notes" class="btn" type="button" data-i18n="case.notes">Notlar…</button>
             <button id="btn-findings" class="btn" type="button" data-i18n="case.findings">Bulgular…</button>
             <button id="btn-report" class="btn" type="button" data-i18n="case.report">Rapor…</button>
@@ -153,7 +154,15 @@
               <h2 data-i18n="technical.heading">Teknik ön inceleme</h2>
               <p class="muted small" data-i18n="technical.lede">Yalnızca gözlem: kapsayıcı, akış, örnekleme ve çalıştırma kayıtları. Özgünlük veya hukuki nitelendirme üretilmez.</p>
             </div>
-            <div id="technical-body" class="technical-body"></div>
+            <section class="technical-section">
+              <h3 data-i18n="technical.materialHeading">İnceleme materyali</h3>
+              <div id="technical-body" class="technical-body"></div>
+            </section>
+            <section class="technical-section">
+              <h3 data-i18n="technical.runsHeading">Transkripsiyon çalıştırma kayıtları</h3>
+              <p class="muted small" data-i18n="technical.runsLede">Her çalıştırmanın motoru, modeli, çalışma kipi ve sonucu. Bu kayıtlar kanıt zinciri değil, yazılım izlenebilirlik bilgisidir.</p>
+              <ul id="technical-runs" class="technical-runs"></ul>
+            </section>
           </section>
 
           <section id="view-studio" class="case-view-page">
@@ -451,6 +460,12 @@
         </label>
         <button id="btn-report-apply-template" class="btn btn-small" type="button" data-i18n="report.applyTemplate">Şablonu uygula</button>
       </div>
+      <div class="report-ai-row">
+        <label class="field field-inline"><input type="checkbox" id="chk-ai-assist" /><span data-i18n="report.aiEnable">Yerel taslak toplayıcıyı etkinleştir (ağ yok)</span></label>
+        <button id="btn-report-ai-draft" class="btn btn-small" type="button" data-i18n="report.aiDraft">Taslak verisini topla</button>
+        <span id="report-ai-status" class="muted small"></span>
+      </div>
+      <ul id="report-ai-draft" class="ai-draft-list hidden"></ul>
       <h3 data-i18n="report.checklist">Teslime hazırlık kontrol listesi</h3>
       <ul id="report-checklist" class="checklist"></ul>
       <h3 data-i18n="report.revisions">Rapor revizyonları</h3>
@@ -498,15 +513,37 @@
     </form>
   </dialog>
 
-  <dialog id="dialog-delivery" class="dialog">
+  <dialog id="dialog-operations" class="dialog dialog-wide">
+    <form method="dialog">
+      <h2 data-i18n="ops.title">İşlemler</h2>
+      <p class="muted small" data-i18n="ops.note">
+        Bu dosyadaki devam eden ve son çalıştırmaların durumu. Sayılar gerçek olaylardan gelir; iptal edilemeyen bir iş için iptal düğmesi gösterilmez.
+      </p>
+      <ul id="ops-list" class="ops-list"></ul>
+      <div class="ops-actions">
+        <button id="btn-ops-cancel" class="btn" type="button" data-i18n="ops.cancel">Çalışan transkripsiyonu iptal et</button>
+        <button id="btn-ops-refresh" class="btn" type="button" data-i18n="ops.refresh">Yenile</button>
+      </div>
+      <menu>
+        <button value="cancel" class="btn" data-i18n="ops.close">Kapat</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dialog-delivery" class="dialog dialog-wide">
     <form method="dialog">
       <h2 data-i18n="delivery.title">Teslim paketi</h2>
       <p class="muted small" data-i18n="delivery.body">
         Raporu, transkriptleri, teknik meta verileri ve özetleri tek bir dosyada toplar; alıcı neyin teslim edildiğini doğrulayabilir.
       </p>
+      <h3 data-i18n="delivery.reviewHeading">Teslim öncesi kontrol</h3>
+      <ul id="delivery-checklist" class="checklist"></ul>
+      <h3 data-i18n="delivery.outputsHeading">Çıktılar</h3>
+      <ul id="delivery-outputs" class="delivery-outputs"></ul>
       <label class="field field-inline"><input type="checkbox" id="chk-delivery-evidence" /><span data-i18n="delivery.includeEvidence">Materyal kopyalarını ekle (büyük)</span></label>
       <menu>
         <button value="cancel" class="btn" data-i18n="delivery.cancel">Vazgeç</button>
+        <button id="btn-delivery-uyap" class="btn" type="button" data-i18n="delivery.uyap">UYAP'a hazır dosyaları oluştur…</button>
         <button id="btn-run-delivery" value="default" class="btn btn-primary" data-i18n="delivery.create">Paketi oluştur…</button>
       </menu>
     </form>

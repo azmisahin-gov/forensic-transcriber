@@ -912,12 +912,14 @@ function registerIpc() {
 
   // Optional local assist. Off by default, no model is downloaded or bundled,
   // and nothing is ever sent off the machine. The operator always edits and
-  // verifies the text; the assist only pre-fills a suggestion.
-  handle(IPC.AI_STATUS, async () => aiAssist.status());
+  // verifies the text; the assist only pre-fills a suggestion. Enabling it is an
+  // explicit, persisted choice ("ai_assist_enabled"); it never calls out.
+  handle(IPC.AI_STATUS, async () => aiAssist.status({ enabled: storage.getPreference('ai_assist_enabled', false) === true }));
   handle(IPC.AI_GENERATE, async (_e, input = {}) => {
     const { caseId, evidenceId, action, prompt, revisionId } = input;
     requireCase(caseId);
-    return aiAssist.generate({ storage, caseId, evidenceId, action, prompt, revisionId });
+    const assistState = { enabled: storage.getPreference('ai_assist_enabled', false) === true };
+    return aiAssist.generate({ storage, caseId, evidenceId, action, prompt, revisionId, state: assistState });
   });
 
   // UYAP delivery: assemble the report and transcript exports into a folder the
