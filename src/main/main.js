@@ -302,7 +302,18 @@ async function buildReportForCase(caseId) {
     report,
     integrity,
     dashboard,
+    analysis: collectAnalysis(caseId),
   });
+}
+
+/** Gather the expert analysis graph for the report, without mutating it. */
+function collectAnalysis(caseId) {
+  return {
+    passages: storage.listPassages(caseId),
+    claims: storage.listClaims(caseId),
+    sources: storage.listSources(caseId),
+    verifications: storage.listVerifications(caseId),
+  };
 }
 
 
@@ -758,7 +769,7 @@ function registerIpc() {
     const integrity = await verifyEvidenceIntegrity(evidence);
     const report = storage.getReport(caseId);
     const dashboard = storage.caseDashboard(caseId);
-    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard });
+    return reports.buildChecklist({ caseRecord: kase, evidence, transcripts, integrity, report, dashboard, analysis: collectAnalysis(caseId) });
   });
 
   // Render the report to the requested formats, written to a folder the user

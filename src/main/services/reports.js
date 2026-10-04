@@ -90,21 +90,54 @@ const TEMPLATES = Object.freeze({
       'Ekler',
     ],
   },
+  // Expert template. Mirrors the ten-part structure the Ministry publishes for
+  // 56.12 work, adding the expert analysis layer (critical passages, the
+  // claim-evidence matrix, uncertainty and the legal-scope boundary). The
+  // machine transcript and the expert reading stay in separate sections.
+  expert: {
+    label: 'Bilirkişi (56.12)',
+    sections: [
+      'Görevlendirme ve İnceleme Soruları',
+      'İncelenen Materyaller',
+      'Dosya Bütünlüğü',
+      'Teknik Ses Özellikleri',
+      'Yöntem ve Kullanılan Araçlar',
+      'Doğrulanmış Transkript',
+      'Zaman Çizelgesi',
+      'Kritik Pasajlar',
+      'İddia–Kanıt Matrisi',
+      'Teknik Sonuç ve Belirsizlikler',
+    ],
+  },
 });
 
 const SECTION_KEYS = Object.freeze({
   'Görevlendirme': 'assignment',
   'Görevlendirme ve Taraflar': 'assignment',
   'Soruşturma Konusu': 'assignment',
+  'Görevlendirme ve İnceleme Soruları': 'assignment',
   'İnceleme Konusu': 'subject',
   'İnceleme Konusu ve Kapsamı': 'subject',
   'İncelemeye Esas Materyaller': 'materials',
+  'İncelenen Materyaller': 'materials',
   'İnceleme Yöntemi': 'method',
+  'Yöntem ve Kullanılan Araçlar': 'method',
   'Kullanılan Teknik Araçlar': 'tools',
   'Transkripsiyon Sonuçları': 'transcripts',
+  'Doğrulanmış Transkript': 'transcripts',
   'Sorular ve Cevapları': 'questions',
   'Ekler': 'attachments',
+  'Dosya Bütünlüğü': 'integrity',
+  'Teknik Ses Özellikleri': 'audio',
+  'Zaman Çizelgesi': 'timeline',
+  'Kritik Pasajlar': 'passages',
+  'İddia–Kanıt Matrisi': 'claims',
+  'Teknik Sonuç ve Belirsizlikler': 'conclusion',
 });
+
+const LEGAL_SCOPE_LINE =
+  'Bu belge teknik bir çalışma ürünüdür; hukuki değerlendirme, delilin gerçekliğine ilişkin sonuç, ' +
+  'kimlik tespiti veya konuşmacı tanıma içermez.';
 
 const METHOD_TEXT =
   'İncelemeye esas ses kayıtları, orijinal dosyaları değiştirilmeden bu bilgisayarda yerel olarak ' +
@@ -156,7 +189,7 @@ function assignmentLines(kase) {
  * Populate the sections whose content can be derived from verified case data.
  * The operator's own text (Bulgular, Sonuç) is never generated.
  */
-function autoPopulate(report, { caseRecord, evidence, transcripts, notes, engineInfo }) {
+function autoPopulate(report, { caseRecord, evidence, transcripts, notes, engineInfo, analysis = {}, dashboard = null }) {
   const sections = (report && report.sections ? report.sections : defaultSections(report && report.template)).map((s) => ({ ...s }));
   const bodyFor = (key) => {
     const idx = sections.findIndex((s) => SECTION_KEYS[s.title] === key);
@@ -195,23 +228,26 @@ function autoPopulate(report, { caseRecord, evidence, transcripts, notes, engine
   }
 
   const method = bodyFor('method');
-  if (method && !method.body) method.body = METHOD_TEXT;
-
   const tools = bodyFor('tools');
-  if (tools) {
-    const lines = [];
-    if (engineInfo) {
-      if (engineInfo.engine) lines.push(`Motor: ${engineInfo.engine}`);
-      if (engineInfo.engineVersion) lines.push(`Motor sürümü: ${engineInfo.engineVersion}`);
-      if (engineInfo.modelId) lines.push(`Model: ${engineInfo.modelId}`);
-      if (engineInfo.modelSha256) lines.push(`Model SHA-256: ${engineInfo.modelSha256}`);
-      if (engineInfo.runtimeMode) lines.push(`Çalışma modu: ${String(engineInfo.runtimeMode).toUpperCase()}`);
-      if (engineInfo.runtimeReason) lines.push(`Mod gerekçesi: ${engineInfo.runtimeReason}`);
-      if (engineInfo.vadModel) lines.push(`Ses etkinlik sezimi: ${engineInfo.vadModel}`);
-    }
-    lines.push('Otomatik konuşma tanıma çıktısı makine çıktısıdır; uzman görüşü değildir.');
-    tools.body = lines.join('\n');
+  const toolLines = [];
+  if (engineInfo) {
+    if (engineInfo.engine) toolLines.push(`Motor: ${engineInfo.engine}`);
+    if (engineInfo.engineVersion) toolLines.push(`Motor sürümü: ${engineInfo.engineVersion}`);
+    if (engineInfo.modelId) toolLines.push(`Model: ${engineInfo.modelId}`);
+    if (engineInfo.modelSha256) toolLines.push(`Model SHA-256: ${engineInfo.modelSha256}`);
+    if (engineInfo.runtimeMode) toolLines.push(`Çalışma modu: ${String(engineInfo.runtimeMode).toUpperCase()}`);
+    if (engineInfo.runtimeReason) toolLines.push(`Mod gerekçesi: ${engineInfo.runtimeReason}`);
+    if (engineInfo.vadModel) toolLines.push(`Ses etkinlik sezimi: ${engineInfo.vadModel}`);
   }
+  toolLines.push('Otomatik konuşma tanıma çıktısı makine çıktısıdır; uzman görüşü değildir.');
+
+  if (method) {
+    // Templates without a separate tools section (e.g. the expert template)
+    // fold the engine record into the method section instead of dropping it.
+    const toolBlock = tools ? '' : `\n\n${toolLines.join('\n')}`;
+    if (!method.body) method.body = METHOD_TEXT + toolBlock;
+  }
+  if (tools) tools.body = toolLines.join('\n');
 
   const transcriptsSection = bodyFor('transcripts');
   if (transcriptsSection) {
@@ -250,6 +286,108 @@ function autoPopulate(report, { caseRecord, evidence, transcripts, notes, engine
     attachments.body = lines.join('\n');
   }
 
+  // ---- expert template sections (present only when the template has them) ----
+
+  const integrity = bodyFor('integrity');
+  if (integrity) {
+    integrity.body = evidence
+      .map((ev, i) => `${i + 1}. ${ev.original_name}\n   SHA-256: ${ev.sha256}\n   Boyut: ${ev.size_bytes} bayt`)
+      .join('\n');
+    integrity.body += '\n\nSHA-256 değerleri bu yazılımın kayıt/takip özelliğidir; delil zinciri (chain of custody) iddiası değildir.';
+  }
+
+  const audio = bodyFor('audio');
+  if (audio) {
+    audio.body = evidence
+      .map((ev, i) => {
+        const parts = [`${i + 1}. ${ev.original_name}`];
+        if (ev.format) parts.push(`   Biçim: ${ev.format}`);
+        if (ev.duration_seconds != null) parts.push(`   Süre: ${formatClock(ev.duration_seconds)}`);
+        if (ev.sample_rate != null) parts.push(`   Örnekleme: ${ev.sample_rate} Hz`);
+        if (ev.channels != null) parts.push(`   Kanal: ${ev.channels}`);
+        if (ev.audio_stream_count != null) {
+          parts.push(`   Ses akışı sayısı: ${ev.audio_stream_count}`);
+          if (ev.audio_stream_count > 1) parts.push('   Not: yalnızca ilk ses akışı (sıra 0) çözümlenmiştir.');
+        }
+        return parts.join('\n');
+      })
+      .join('\n\n');
+  }
+
+  const timeline = bodyFor('timeline');
+  if (timeline) {
+    const rows = [];
+    for (const t of transcripts) {
+      for (const ex of t.excerpts || []) {
+        rows.push({ start: ex.start, end: ex.end, evidence_name: t.evidence_name, speaker: ex.speaker, text: ex.text });
+      }
+    }
+    rows.sort((a, b) => a.start - b.start);
+    const cap = 400;
+    const shown = rows.slice(0, cap);
+    timeline.body = shown
+      .map((r) => `[${formatClock(r.start)} – ${formatClock(r.end)}] ${r.evidence_name} · ${r.speaker}\n${r.text}`)
+      .join('\n\n');
+    if (rows.length > cap) timeline.body += `\n\n(İlk ${cap} satır gösterildi; toplam ${rows.length} segment.)`;
+  }
+
+  const passages = bodyFor('passages');
+  if (passages) {
+    const list = analysis.passages || [];
+    if (!list.length) {
+      passages.body = '(Kritik pasaj işaretlenmemiş.)';
+    } else {
+      passages.body = list
+        .map((p, i) => {
+          const ctx = `±${p.context_before_seconds}s / ±${p.context_after_seconds}s`;
+          const rev = p.revision_id ? ` sürüm ${p.revision_id}` : ' sürüm yok';
+          return `${i + 1}. [${formatClock(p.start_seconds)} – ${formatClock(p.end_seconds)}] (${ctx},${rev})\n`
+            + `   Tür: ${p.speech_act} · Güven: ${p.confidence}\n`
+            + `   "${p.text}"`;
+        })
+        .join('\n\n');
+    }
+  }
+
+  const claims = bodyFor('claims');
+  if (claims) {
+    const list = analysis.claims || [];
+    const sources = analysis.sources || [];
+    if (!list.length) {
+      claims.body = '(İddia kaydedilmemiş.)';
+    } else {
+      claims.body = list
+        .map((c, i) => {
+          const parts = [
+            `${i + 1}. Söylenen: ${c.as_stated || '—'}`,
+            `   İleri sürülen anlam: ${c.alleged_meaning || '—'}`,
+            `   İleri süren: ${c.asserted_by || '—'}`,
+            `   Doğrulama: ${c.verification}`,
+          ];
+          const linked = sources.filter((s) => s.claim_id === c.claim_id);
+          if (linked.length) {
+            for (const s of linked) {
+              parts.push(`   Kaynak: ${s.title || '—'} (${s.kind}, ${s.verification})${s.citation ? ` — ${s.citation}` : ''}`);
+            }
+          } else {
+            parts.push('   Kaynak: dış kaynak eklenmemiş');
+          }
+          return parts.join('\n');
+        })
+        .join('\n\n');
+    }
+  }
+
+  const conclusion = bodyFor('conclusion');
+  if (conclusion && !conclusion.body) {
+    const unclear = dashboard ? dashboard.unclear_segments : 0;
+    conclusion.body = [
+      unclear ? `Belirsiz bölümler: ${unclear} (transkriptte işaretli).` : 'Belirsiz bölüm işaretlenmemiş.',
+      '',
+      LEGAL_SCOPE_LINE,
+    ].join('\n');
+  }
+
   return sections;
 }
 
@@ -281,10 +419,10 @@ function collectTranscripts({ caseRecord, evidence, storage }) {
 }
 
 /** Build a structured report document from case data, without writing anything. */
-function buildReport({ caseRecord, evidence, transcripts, notes, engineInfo, report, integrity = [], dashboard = null }) {
+function buildReport({ caseRecord, evidence, transcripts, notes, engineInfo, report, integrity = [], dashboard = null, analysis = {} }) {
   const base = report || { template: 'generic', title: caseRecord.title, sections: defaultSections('generic') };
-  const sections = autoPopulate(base, { caseRecord, evidence, transcripts, notes, engineInfo });
-  const checklist = buildChecklist({ caseRecord, evidence, transcripts, integrity, notes, report: base, dashboard });
+  const sections = autoPopulate(base, { caseRecord, evidence, transcripts, notes, engineInfo, analysis, dashboard });
+  const checklist = buildChecklist({ caseRecord, evidence, transcripts, integrity, notes, report: base, dashboard, analysis });
   return {
     case_id: caseRecord.case_id,
     template: base.template || 'generic',
@@ -355,7 +493,7 @@ function reportToTxt(report) {
  *
  * @returns {{items:Array<{id:string,label:string,status:string,detail:string}>, ready:boolean}}
  */
-function buildChecklist({ caseRecord, evidence, transcripts, integrity = [], notes = [], report = null, dashboard = null }) {
+function buildChecklist({ caseRecord, evidence, transcripts, integrity = [], notes = [], report = null, dashboard = null, analysis = {} }) {
   const items = [];
   const add = (id, label, ok, detail, manual = false) => {
     items.push({ id, label, status: manual ? (ok ? 'manual' : 'pending') : ok ? 'ok' : 'pending', detail, manual });
@@ -395,8 +533,25 @@ function buildChecklist({ caseRecord, evidence, transcripts, integrity = [], not
 
   add('backup', 'Yedek mevcut', true, 'case yedeğini alın', true);
 
-  const ready = items.filter((i) => !i.manual).every((i) => i.status === 'ok');
-  return { items, ready };
+  // Expert-template items. They are present for every template so the checklist
+  // has one shape; they only affect `ready` when the case uses the expert
+  // template. A passage counts as context-preserving when it carries a positive
+  // context window; a claim counts as sourced when a source is linked to it.
+  const passages = Array.isArray(analysis.passages) ? analysis.passages : [];
+  const claims = Array.isArray(analysis.claims) ? analysis.claims : [];
+  const sources = Array.isArray(analysis.sources) ? analysis.sources : [];
+  const contextedPassages = passages.filter((p) => (p.context_before_seconds || 0) > 0 || (p.context_after_seconds || 0) > 0);
+  const sourcedClaims = claims.filter((c) => sources.some((s) => s.claim_id === c.claim_id));
+  const expert = report && report.template === 'expert';
+
+  add('passages', 'Kritik pasajlar bağlamlı', passages.length > 0 && contextedPassages.length === passages.length,
+    passages.length ? `${contextedPassages.length}/${passages.length} pasaj bağlamlı` : 'kritik pasaj işaretlenmedi');
+  add('sources', 'Dış kaynaklar doğrulandı', claims.length > 0 && sourcedClaims.length === claims.length,
+    claims.length ? `${sourcedClaims.length}/${claims.length} iddia kaynaklı` : 'iddia kaydedilmedi');
+  add('uncertainty', 'Belirsizlikler yazıldı', true, 'belirsizlikler bölümünü uzman tamamlar', true);
+
+  const ready = items.every((i) => i.status === 'ok');
+  return { items, ready, expert };
 }
 
 /**

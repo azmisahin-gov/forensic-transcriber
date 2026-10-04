@@ -218,6 +218,7 @@
       'btn-transcribe', 'btn-save', 'btn-export', 'btn-diagnostics',
       'btn-open-exports', 'btn-open-datadir', 'btn-archive-export', 'btn-archive-import',
       'btn-notes', 'btn-report', 'btn-delivery', 'btn-support', 'btn-edit-case',
+      'btn-report-apply-template',
       'select-locale', 'btn-theme-light', 'btn-theme-dark',
     ];
     const wired = window.__FT_WIRED_CONTROLS__ || new Set();
@@ -1218,8 +1219,60 @@
   async function openReport() {
     if (!state.caseRecord) return;
     $('#dialog-report').showModal();
+    await renderReportTemplates();
     await refreshChecklist();
     await renderReportRevisions();
+  }
+
+  // Template choice changes the section skeleton. Applying a template appends a
+  // report revision with the new structure; existing report revisions stay
+  // readable, so switching to the expert template never discards prior work.
+  async function renderReportTemplates() {
+    const select = $('#report-template');
+    if (!select) return;
+    let templates = [];
+    try {
+      templates = await call(api.report.templates());
+    } catch (err) {
+      templates = [];
+    }
+    const current = state.report || (await call(api.report.get(state.caseRecord.case_id)));
+    state.report = current || null;
+    select.innerHTML = '';
+    for (const tpl of templates) {
+      const opt = document.createElement('option');
+      opt.value = tpl.id;
+      opt.textContent = tpl.label;
+      if (current && current.template === tpl.id) opt.selected = true;
+      select.appendChild(opt);
+    }
+    if (!current && templates.length) select.value = templates[0].id;
+  }
+
+  async function applyReportTemplate() {
+    const select = $('#report-template');
+    if (!select || !state.caseRecord) return;
+    try {
+      const templates = await call(api.report.templates());
+      const tpl = templates.find((x) => x.id === select.value);
+      if (!tpl) return;
+      // Merge the new skeleton with the current draft: a section that exists in
+      // both keeps the operator's body, a new section starts empty. Sections the
+      // new template drops stay readable in the prior report revision, so
+      // switching templates never discards entered text.
+      const existing = (state.report && Array.isArray(state.report.sections)) ? state.report.sections : [];
+      const sections = tpl.sections.map((title, i) => {
+        const prev = existing.find((s) => s.title === title);
+        return prev ? { ...prev } : { id: `SEC-${i + 1}`, title, body: '', auto: true };
+      });
+      const saved = await call(api.report.save(state.caseRecord.case_id, { template: tpl.id, sections }));
+      state.report = saved;
+      toast(t('msg.reportTemplateApplied'), 'success');
+      await refreshChecklist();
+      await renderReportRevisions();
+    } catch (err) {
+      toast(`${t('error.reportTemplate')}: ${errText(err)}`, 'error');
+    }
   }
 
   async function refreshChecklist() {
@@ -2383,6 +2436,7 @@
     bind('#btn-case-search', 'click', runCaseSearch);
     bind('#btn-report-build', 'click', refreshChecklist);
     bind('#btn-report-export', 'click', exportReport);
+    bind('#btn-report-apply-template', 'click', applyReportTemplate);
 
     // Language selection. Default is Turkish; switching re-renders the static
     // markup and the dynamic lists without reloading the window.
