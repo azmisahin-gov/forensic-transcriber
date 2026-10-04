@@ -33,6 +33,9 @@ Format based on Keep a Changelog; the project follows Semantic Versioning.
 
 - `assist.generate()` accepts an explicit `state` so the persisted preference
   is honored by the main process instead of a module constant.
+- The packaged `--acceptance-test` now includes steps for the technical run
+  list, the operations centre, the Ctrl+K search palette, the delivery surface
+  and the default-off draft collector.
 
 ## [0.4.0] - 2026-10-04
 

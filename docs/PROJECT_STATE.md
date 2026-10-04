@@ -59,20 +59,33 @@ Committed so far:
 
 ### Verified for this branch
 
-- `node --test tests/unit/*.test.js` → **220 passed / 225 total**, 0 fail,
-  5 skip.
 - `npm run lint` → Lint OK — 72 files checked.
+- `npm run test:unit` → **225 passed / 225 total**, 0 fail, 0 skip (the 5
+  previously-skipped tests need FFmpeg, which was installed on the host).
 - `node scripts/security-check.js` → 0 critical findings.
+- Integration (with system FFmpeg + bundled whisper-cli): `FT_FFMPEG_PATH=
+  /usr/bin/ffmpeg FT_FFPROBE_PATH=/usr/bin/ffprobe FT_WHISPER_CLI_PATH=
+  vendor/linux-x64/bin/whisper-cli node --test tests/integration/*.test.js` →
+  **31/31** passed, 0 fail, 0 skip.
+- Packaged smoke test (`--smoke-test`, headless, freshly repackaged
+  `release/linux-unpacked`): `ok:true`, all steps pass, `unwired: 0`.
+- Packaged acceptance test (`--acceptance-test`, 60 steps incl. the new
+  technical-runs, operations-centre, Ctrl+K, delivery and draft-collector
+  steps): `ok:true`, 0 failed.
+- `npm run verify:release` (full gate, `--models-dir` default, system FFmpeg):
+  **10/10 gates passed — Release gate met** (lint, unit, security, versioning,
+  integration, package, packaged smoke, packaged acceptance, engine capability).
 
 ### Not yet verified for this branch
 
-- Integration tests require FFmpeg + whisper.cpp and are not run here
-  (`vendor/linux-x64` ffmpeg is missing shared libraries): **NOT VERIFIED**.
 - Windows CI for this branch has not run (the branch is not pushed). Windows-only
   behaviour (SQLite migration, atomic writes, path handling, packaged launch) is
-  therefore **NOT VERIFIED** for this branch.
-- Real RTX 3060 GPU verification is not possible in this environment; GPU
-  capability / selection / actual use are reported separately and never conflated.
+  therefore **NOT VERIFIED** for this branch; the packaged tests above ran on
+  Linux only.
+- Real RTX 3060 GPU verification is not possible in this environment. The engine
+  report shows the CPU runtime only (`gpu runtime not bundled`, run mode cpu);
+  GPU capability / selection / actual use are reported separately and never
+  conflated.
 
 ## P15 — delivery (merged + released)
 
